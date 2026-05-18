@@ -1,0 +1,6 @@
+# First compile generates. We snapshot the AccountsApi mtime, then run
+# compile again. The second compile must not re-emit (mtime unchanged).
+> compile
+> snapshotAccountsApi
+> compile
+> verifyNoRegen

@@ -1,0 +1,3 @@
+# With klaviyoUseScalafmt off, codegen still emits a compilable tree.
+> compile
+> verifyCompileOnly

@@ -1,0 +1,3 @@
+# default-settings: enable the plugin, compile, assert generated tree layout.
+> compile
+> verifyDefaultLayout

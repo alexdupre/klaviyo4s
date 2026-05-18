@@ -1,0 +1,12 @@
+.bloop
+.bsp
+.metals
+.vscode
+metals.sbt
+target
+
+# Scripted-test sandbox dirs created by sbt scripted runner.
+modules/sbt-plugin/src/sbt-test/**/target/
+
+# Example projects: src_managed is regenerated at compile time.
+examples/src_managed/

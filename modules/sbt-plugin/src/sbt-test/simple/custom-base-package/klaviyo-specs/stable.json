@@ -1,0 +1,102 @@
+{
+  "openapi": "3.0.2",
+  "info": {
+    "title": "Klaviyo OpenAPI (test fixture)",
+    "version": "2026-04-15"
+  },
+  "servers": [
+    { "url": "https://a.klaviyo.com" }
+  ],
+  "tags": [
+    { "name": "Accounts" }
+  ],
+  "paths": {
+    "/api/accounts": {
+      "get": {
+        "tags": ["Accounts"],
+        "operationId": "get_accounts",
+        "summary": "List accounts",
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {
+              "application/vnd.api+json": {
+                "schema": { "$ref": "#/components/schemas/GetAccountResponseCollection" }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "revision",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string", "default": "2026-04-15" }
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AccountEnum": {
+        "type": "string",
+        "enum": ["account"]
+      },
+      "ObjectLinks": {
+        "type": "object",
+        "properties": {
+          "self": { "type": "string" }
+        },
+        "required": ["self"]
+      },
+      "CollectionLinks": {
+        "type": "object",
+        "properties": {
+          "self":  { "type": "string" },
+          "first": { "type": "string", "nullable": true },
+          "last":  { "type": "string", "nullable": true },
+          "prev":  { "type": "string", "nullable": true },
+          "next":  { "type": "string", "nullable": true }
+        },
+        "required": ["self", "first", "last", "prev", "next"]
+      },
+      "AccountResponseObjectResourceAttributes": {
+        "type": "object",
+        "properties": {
+          "contact_information": {
+            "type": "object",
+            "properties": {
+              "default_sender_name": { "type": "string", "nullable": true }
+            }
+          },
+          "industry":     { "type": "string", "nullable": true },
+          "timezone":     { "type": "string", "nullable": true },
+          "preferred_currency": { "type": "string", "nullable": true },
+          "public_api_key": { "type": "string", "nullable": true }
+        }
+      },
+      "AccountResponseObjectResource": {
+        "type": "object",
+        "properties": {
+          "type": { "$ref": "#/components/schemas/AccountEnum" },
+          "id":   { "type": "string" },
+          "attributes": { "$ref": "#/components/schemas/AccountResponseObjectResourceAttributes" },
+          "links": { "$ref": "#/components/schemas/ObjectLinks" }
+        },
+        "required": ["type", "id", "attributes", "links"]
+      },
+      "GetAccountResponseCollection": {
+        "type": "object",
+        "properties": {
+          "data":  {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/AccountResponseObjectResource" }
+          },
+          "links": { "$ref": "#/components/schemas/CollectionLinks" }
+        },
+        "required": ["data", "links"]
+      }
+    }
+  }
+}

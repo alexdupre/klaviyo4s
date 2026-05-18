@@ -1,0 +1,8 @@
+# First compile generates under the default base package.
+# Then change `klaviyoBasePackage` (which is folded into the cache key)
+# and compile again. The cache must invalidate and regen.
+> compile
+> snapshotAccountsApi
+> set root / klaviyoBasePackage := "com.example.kv"
+> compile
+> verifyRegen

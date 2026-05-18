@@ -1,0 +1,5 @@
+# Hits github.com to pull the live stable.json. Skip on networkless CI by
+# disabling this test in the scripted runner's pattern, or simply expect
+# this test to fail when offline.
+> klaviyoRefreshSpecs
+> verifyRefreshedSpec

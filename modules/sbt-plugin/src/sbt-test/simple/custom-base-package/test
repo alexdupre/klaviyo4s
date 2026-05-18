@@ -1,0 +1,3 @@
+# Override klaviyoBasePackage and assert the emitted tree honors it.
+> compile
+> verifyCustomLayout
