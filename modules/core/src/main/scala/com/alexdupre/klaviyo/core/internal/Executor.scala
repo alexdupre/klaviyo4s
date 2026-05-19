@@ -273,7 +273,7 @@ object Executor {
     resp
       .header("Retry-After")
       .flatMap { raw =>
-        raw.trim.toIntOption.map(s => FiniteDuration(s.toLong, SECONDS))
+        raw.trim.toLongOption.map(s => FiniteDuration(s, SECONDS))
       }
   }
 
