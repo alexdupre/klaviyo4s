@@ -42,6 +42,19 @@ object Emitter {
 
   def emit(plan: SpecPlan, basePackage: String = "com.alexdupre.klaviyo"): Seq[EmittedFile] =
     new Emitter(basePackage).emit(plan)
+
+  /** Children of a single parent record, bucketed by kind. Lifted to
+    * the companion (rather than nested under the class) so Scala 2.12
+    * doesn't emit the "outer reference cannot be checked at runtime"
+    * warning that fires for inner case classes whose pattern matches
+    * would otherwise require a captured outer pointer.
+    */
+  private final case class ParentChildren(
+    enums: List[TypeDef.StringEnum] = Nil,
+    primitiveUnions: List[TypeDef.PrimitiveUnion] = Nil,
+    resourceUnions: List[TypeDef.ResourceUnion] = Nil,
+    records: List[TypeDef.Record] = Nil
+  )
 }
 
 class Emitter(val basePackage: String) {
@@ -69,34 +82,16 @@ class Emitter(val basePackage: String) {
     */
   private var displayNameMap: Map[String, String] = Map.empty
 
-  /** Records grouped by parent name. Populated by [[emit]] and
-    * consumed by [[renderRecord]] when rendering a parent's
-    * companion body. Children are emitted in plan order (their
-    * synthesis order, which roughly tracks declaration order in
-    * the spec).
-    */
-  private var childRecordsByParent: Map[String, List[TypeDef.Record]] = Map.empty
+  import Emitter.ParentChildren
 
-  /** StringEnums grouped by parent name. Same shape as
-    * [[childRecordsByParent]] but for inline enums — single-parent
-    * inline enums get nested in their parent's companion alongside
-    * any record children.
+  /** Map of parent type name → its nestable children, populated by
+    * [[emit]] and consumed by [[renderRecord]] when rendering a
+    * parent's companion body. Combines what used to be four separate
+    * `child*ByParent` maps into one lookup per parent. Children are
+    * emitted in plan order (their synthesis order, which roughly
+    * tracks declaration order in the spec).
     */
-  private var childEnumsByParent: Map[String, List[TypeDef.StringEnum]] = Map.empty
-
-  /** PrimitiveUnions grouped by parent name. Primitive-of-oneOf
-    * types synthesised at a field position are nested under that
-    * field's parent record (they're always single-parent —
-    * different parents wanting the same shape would hit different
-    * `<parent><field>` prefixes).
-    */
-  private var childPrimitiveUnionsByParent: Map[String, List[TypeDef.PrimitiveUnion]] = Map.empty
-
-  /** ResourceUnions grouped by parent name. Same shape as
-    * [[childPrimitiveUnionsByParent]]; covers `oneOf` of
-    * JSON:API-style discriminated resources.
-    */
-  private var childResourceUnionsByParent: Map[String, List[TypeDef.ResourceUnion]] = Map.empty
+  private var childrenByParent: Map[String, ParentChildren] = Map.empty
 
   /** Records indexed by full plan-level name. Used by the API method
     * emitter to look up the body shape's field set when assembling a
@@ -112,10 +107,19 @@ class Emitter(val basePackage: String) {
     val enums = plan.types.collect { case e: TypeDef.StringEnum => e }
     val primUnions = plan.types.collect { case u: TypeDef.PrimitiveUnion => u }
     val resUnions = plan.types.collect { case u: TypeDef.ResourceUnion => u }
-    childRecordsByParent = records.filter(_.parent.isDefined).groupBy(_.parent.get)
-    childEnumsByParent = enums.filter(_.parent.isDefined).groupBy(_.parent.get)
-    childPrimitiveUnionsByParent = primUnions.filter(_.parent.isDefined).groupBy(_.parent.get)
-    childResourceUnionsByParent = resUnions.filter(_.parent.isDefined).groupBy(_.parent.get)
+    val childRecords = records.filter(_.parent.isDefined).groupBy(_.parent.get)
+    val childEnums = enums.filter(_.parent.isDefined).groupBy(_.parent.get)
+    val childPrimitiveUnions = primUnions.filter(_.parent.isDefined).groupBy(_.parent.get)
+    val childResourceUnions = resUnions.filter(_.parent.isDefined).groupBy(_.parent.get)
+    val parentKeys = childRecords.keySet | childEnums.keySet | childPrimitiveUnions.keySet | childResourceUnions.keySet
+    childrenByParent = parentKeys.iterator.map { k =>
+      k -> ParentChildren(
+        enums = childEnums.getOrElse(k, Nil),
+        primitiveUnions = childPrimitiveUnions.getOrElse(k, Nil),
+        resourceUnions = childResourceUnions.getOrElse(k, Nil),
+        records = childRecords.getOrElse(k, Nil)
+      )
+    }.toMap
     recordsByName = records.iterator.map(r => r.name -> r).toMap
     displayNameMap = buildDisplayNameMap(plan.types, records, enums, primUnions, resUnions)
 
@@ -664,15 +668,12 @@ class Emitter(val basePackage: String) {
     // (each is its own object with its own givens) but keeping
     // enums first is a tiny readability win — they tend to be
     // shorter, and parent records often reference them.
-    val nestedEnums = childEnumsByParent.getOrElse(td.name, Nil)
-    val nestedPrimitiveUnions = childPrimitiveUnionsByParent.getOrElse(td.name, Nil)
-    val nestedResourceUnions = childResourceUnionsByParent.getOrElse(td.name, Nil)
-    val nestedRecords = childRecordsByParent.getOrElse(td.name, Nil)
+    val children = childrenByParent.getOrElse(td.name, ParentChildren())
     val nestedRendered = (
-      nestedEnums.map(renderEnum)
-        ++ nestedPrimitiveUnions.map(renderPrimitiveUnion)
-        ++ nestedResourceUnions.map(renderResourceUnion)
-        ++ nestedRecords.map(renderRecord)
+      children.enums.map(renderEnum)
+        ++ children.primitiveUnions.map(renderPrimitiveUnion)
+        ++ children.resourceUnions.map(renderResourceUnion)
+        ++ children.records.map(renderRecord)
     ).mkString("\n\n")
 
     // Records whose field set includes a `java.nio.file.Path` (from a
