@@ -86,4 +86,48 @@ final class PaginationSpec extends munit.FunSuite {
     assertEquals(unit, ())
     assertEquals(seen.toList, List(Vector("a"), Vector("b"), Vector("c")))
   }
+
+  // ---------------------------------------------------------------------
+  // Extension methods on KlaviyoClient[F].
+  //
+  // These delegate to the free functions above, but the extension form
+  // is what user code reaches for (`client.accounts.collectAll(...)`),
+  // so a smoke test for the call shape is worth its weight in
+  // regression-resistance: any breakage of the type-inference trick
+  // for `F = Identity` would surface here.
+  // ---------------------------------------------------------------------
+
+  private def syncClient: KlaviyoClient[Identity] = {
+    val backend = SyncBackendStub.whenAnyRequest.thenRespondAdjust("{}")
+    val config = KlaviyoConfig(KlaviyoAuth.PrivateKey("test"), revision = "2024-01-01")
+    new KlaviyoClient[Identity](backend, config)
+  }
+
+  test("KlaviyoClient.collectAll extension threads pages through the receiver's monad") {
+    val client = syncClient
+    val pages  = Iterator(
+      resp(Seq("a", "b"), Some("p2")),
+      resp(Seq("c"), None)
+    )
+    val all = client.collectAll[Resp, String](
+      _ => pages.next(),
+      r => (r.data, r.links)
+    )
+    assertEquals(all, Vector("a", "b", "c"))
+  }
+
+  test("KlaviyoClient.foreachPage extension invokes the callback once per page") {
+    val client = syncClient
+    val pages  = Iterator(
+      resp(Seq("a"), Some("p2")),
+      resp(Seq("b"), None)
+    )
+    val seen = collection.mutable.ListBuffer.empty[Vector[String]]
+    client.foreachPage[Resp, String](
+      _ => pages.next(),
+      r => (r.data, r.links),
+      items => { seen += items; () }
+    )
+    assertEquals(seen.toList, List(Vector("a"), Vector("b")))
+  }
 }
