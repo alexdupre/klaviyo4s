@@ -79,7 +79,7 @@ object Executor {
           case Outcome.Retry(reason) if attemptNumber < policy.maxAttempts =>
             nextDelay(policy, reason, attemptNumber) match {
               case Some(delay) =>
-                notifyRetry(policy, attemptNumber, delay, eventReason(reason, resp))
+                notifyRetry(request, policy, attemptNumber, delay, eventReason(reason, resp))
                 client.sleep.sleep(delay).flatMap(_ =>
                   attempt(client, request, decode, attemptNumber + 1)
                 )
@@ -142,7 +142,7 @@ object Executor {
       // `Transient` always uses computed exp-backoff, which is
       // capped — `nextDelay` never returns `None` for this branch.
       val delay = nextDelay(policy, Outcome.RetryReason.Transient, attemptNumber).getOrElse(policy.maxDelay)
-      notifyRetry(policy, attemptNumber, delay, RetryEvent.Reason.Transport(cause))
+      notifyRetry(request, policy, attemptNumber, delay, RetryEvent.Reason.Transport(cause))
       client.sleep.sleep(delay).flatMap(_ =>
         attempt(client, request, decode, attemptNumber + 1)
       )
@@ -188,12 +188,13 @@ object Executor {
     * the two retry paths (HTTP status, transport) stay consistent.
     */
   private def notifyRetry(
+    request: Request[String],
     policy: RetryPolicy,
     attemptNumber: Int,
     delay: FiniteDuration,
     reason: RetryEvent.Reason
   ): Unit = {
-    try policy.onRetry(RetryEvent(attemptNumber, delay, reason))
+    try policy.onRetry(RetryEvent(request, attemptNumber, delay, reason))
     catch { case NonFatal(_) => () }
   }
 
