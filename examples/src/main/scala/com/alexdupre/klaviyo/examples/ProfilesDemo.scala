@@ -38,7 +38,7 @@ object ProfilesDemo extends DemoApp {
         case Some(pid) =>
           val one = client.profiles.getProfile(pid)
           log(
-            s"profile id=${one.data.id.toOption.getOrElse("?")} email=${one.data.attributes.email.toOption.getOrElse("?")}"
+            s"profile id=${one.data.id.getOrElse("?")} email=${one.data.attributes.email.getOrElse("?")}"
           )
       }
     }
@@ -64,7 +64,7 @@ object ProfilesDemo extends DemoApp {
           )
         )
       )
-      val profileId = resp.data.id.toOption.getOrElse(throw new IllegalStateException("createProfile returned no id"))
+      val profileId = resp.data.id.getOrElse(throw new IllegalStateException("createProfile returned no id"))
       register(s"requestProfileDeletion($email)") {
         client.dataprivacy.requestProfileDeletion(
           DataPrivacyCreateDeletionJobQuery(
@@ -84,7 +84,7 @@ object ProfilesDemo extends DemoApp {
 
       // Re-fetch + update.
       val fetched = client.profiles.getProfile(profileId)
-      log(s"  initial firstName=${fetched.data.attributes.firstName.toOption.getOrElse("?")}")
+      log(s"  initial firstName=${fetched.data.attributes.firstName.getOrElse("?")}")
 
       client.profiles.updateProfile(
         id = profileId,

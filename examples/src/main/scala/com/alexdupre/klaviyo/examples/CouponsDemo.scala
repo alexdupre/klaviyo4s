@@ -41,8 +41,8 @@ object CouponsDemo extends DemoApp {
     section("getCoupon by id") {
       val one = client.coupons.getCoupon(couponId)
       val desc = for {
-        d <- one.data.toOption
-        x <- d.attributes.description.toOption
+        d <- one.data
+        x <- d.attributes.description
       } yield x
       log(s"description=${desc.getOrElse("?")}")
     }

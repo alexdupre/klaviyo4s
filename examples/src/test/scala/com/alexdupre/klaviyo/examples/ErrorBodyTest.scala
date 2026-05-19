@@ -38,8 +38,8 @@ final class ErrorBodyTest extends munit.FunSuite {
     assertEquals(ex.status, 401)
     assertEquals(ex.errors.size, 1)
     val first = ex.errors.head
-    assertEquals(first.code.toOption,   Some("invalid_authentication"))
-    assertEquals(first.title.toOption,  Some("Invalid auth"))
+    assert(first.code.contains("invalid_authentication"))
+    assert(first.title.contains("Invalid auth"))
     assert(ex.getMessage.contains("401"), s"status missing from message: ${ex.getMessage}")
     assert(ex.getMessage.contains("Invalid auth"), s"title missing from message: ${ex.getMessage}")
   }

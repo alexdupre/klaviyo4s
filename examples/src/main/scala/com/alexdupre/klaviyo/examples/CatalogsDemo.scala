@@ -46,7 +46,7 @@ object CatalogsDemo extends DemoApp {
     section("getCatalogItem by id") {
       val one = client.catalogs.getCatalogItem(itemId)
       log(
-        s"title=${one.data.attributes.title.toOption.getOrElse("?")} price=${one.data.attributes.price.toOption.getOrElse(0.0)}"
+        s"title=${one.data.attributes.title.getOrElse("?")} price=${one.data.attributes.price.getOrElse(0.0)}"
       )
     }
 

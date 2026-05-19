@@ -42,7 +42,7 @@ object WebFeedsDemo extends DemoApp {
 
     section("getWebFeed by id") {
       val one = client.webfeeds.getWebFeed(createdId)
-      log(s"url=${one.data.attributes.url}  status=${one.data.attributes.status.toOption.getOrElse("?")}")
+      log(s"url=${one.data.attributes.url}  status=${one.data.attributes.status.getOrElse("?")}")
     }
 
     section("list web feeds (first page)") {

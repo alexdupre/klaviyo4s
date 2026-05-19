@@ -34,12 +34,12 @@ final class ErrorDocumentSpec extends munit.FunSuite {
     val doc = readFromString[ErrorDocument](json)
     assertEquals(doc.errors.size, 1)
     val e = doc.errors.head
-    assertEquals(e.id.toOption, Some("abcd-1234"))
-    assertEquals(e.status.toOption, Some(400))
-    assertEquals(e.code.toOption, Some("invalid_input"))
-    assertEquals(e.title.toOption, Some("Invalid input"))
-    assertEquals(e.detail.toOption, Some("filter parameter is malformed"))
-    assertEquals(e.source.toOption.flatMap(_.parameter.toOption), Some("filter"))
+    assert(e.id.contains("abcd-1234"))
+    assert(e.status.contains(400))
+    assert(e.code.contains("invalid_input"))
+    assert(e.title.contains("Invalid input"))
+    assert(e.detail.contains("filter parameter is malformed"))
+    assert(e.source.flatMap(_.parameter).contains("filter"))
     assertEquals(e.meta.toOption.flatMap(_.get("trace_id")), Some("xyz"))
   }
 
@@ -51,16 +51,16 @@ final class ErrorDocumentSpec extends munit.FunSuite {
 
     val doc = readFromString[ErrorDocument](json)
     val e   = doc.errors.head
-    assertEquals(e.status.toOption, Some(401))
-    assertEquals(e.code.toOption, Some("not_authenticated"))
-    assertEquals(e.detail.toOption, Some("Missing or invalid private key."))
-    assertEquals(e.source.toOption.flatMap(_.pointer.toOption), Some("/data/"))
+    assert(e.status.contains(401))
+    assert(e.code.contains("not_authenticated"))
+    assert(e.detail.contains("Missing or invalid private key."))
+    assert(e.source.flatMap(_.pointer).contains("/data/"))
   }
 
   test("decodes a sparse error envelope without choking on missing keys") {
     val json = """{ "errors": [ { "status": 503 } ] }"""
     val doc  = readFromString[ErrorDocument](json)
-    assertEquals(doc.errors.head.status.toOption, Some(503))
+    assert(doc.errors.head.status.contains(503))
     assertEquals(doc.errors.head.detail, Tristate.Absent)
     assertEquals(doc.errors.head.source, Tristate.Absent)
   }

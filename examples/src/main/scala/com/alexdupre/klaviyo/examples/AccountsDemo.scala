@@ -20,7 +20,7 @@ object AccountsDemo extends DemoApp {
       log(s"got ${resp.data.size} account(s)")
       resp.data.foreach { a =>
         val tz = a.attributes.timezone
-        val ind = a.attributes.industry.toOption.getOrElse("?")
+        val ind = a.attributes.industry.getOrElse("?")
         log(s"  id=${a.id} tz=$tz industry=$ind")
       }
     }
@@ -30,7 +30,7 @@ object AccountsDemo extends DemoApp {
         case None => log("no accounts visible to this key; skipping")
         case Some(first) =>
           val one = client.accounts.getAccount(first.id)
-          log(s"getAccount(${one.data.id}) → industry=${one.data.attributes.industry.toOption.getOrElse("?")}")
+          log(s"getAccount(${one.data.id}) → industry=${one.data.attributes.industry.getOrElse("?")}")
       }
     }
   }

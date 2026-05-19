@@ -41,7 +41,7 @@ object CampaignsDemo extends DemoApp {
         case Some(c) =>
           val one = client.campaigns.getCampaign(c.id)
           val est = scala.util.Try(client.campaigns.getCampaignRecipientEstimation(c.id))
-          val size = est.toOption.map(_.data.attributes.estimatedRecipientCount).getOrElse(0)
+          val size = est.map(_.data.attributes.estimatedRecipientCount).getOrElse(0)
           log(s"campaign ${one.data.id} estimated recipients=$size")
       }
     }

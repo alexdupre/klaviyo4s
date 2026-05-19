@@ -26,7 +26,7 @@ object SegmentsDemo extends DemoApp {
       val resp = client.segments.getSegments()
       log(s"got ${resp.data.size} segment(s) on first page")
       resp.data.take(3).foreach { s =>
-        log(s"  id=${s.id} name=${s.attributes.name.toOption.getOrElse("?")}")
+        log(s"  id=${s.id} name=${s.attributes.name.getOrElse("?")}")
       }
     }
 
@@ -36,7 +36,7 @@ object SegmentsDemo extends DemoApp {
         case None => log("account has no segments; skipping getSegment")
         case Some(seg) =>
           val one = client.segments.getSegment(seg.id)
-          log(s"getSegment(${one.data.id}) name=${one.data.attributes.name.toOption.getOrElse("?")}")
+          log(s"getSegment(${one.data.id}) name=${one.data.attributes.name.getOrElse("?")}")
           // Also exercise the read-side relationship endpoints.
           val tags = client.segments.getTagsForSegment(seg.id)
           val flows = client.segments.getFlowsTriggeredBySegment(seg.id)

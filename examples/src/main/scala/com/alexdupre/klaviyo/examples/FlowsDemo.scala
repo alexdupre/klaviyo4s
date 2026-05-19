@@ -21,7 +21,7 @@ object FlowsDemo extends DemoApp {
       log(s"got ${resp.data.size} flow(s)")
       resp.data.take(3).foreach { f =>
         log(
-          s"  id=${f.id} name=${f.attributes.name.toOption.getOrElse("?")} status=${f.attributes.status.toOption.getOrElse("?")}"
+          s"  id=${f.id} name=${f.attributes.name.getOrElse("?")} status=${f.attributes.status.getOrElse("?")}"
         )
       }
     }

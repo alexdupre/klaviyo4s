@@ -19,7 +19,7 @@ import sttp.client4.Backend
   * client.events.createEvent(payload)
   * }}}
   *
-  * `klaviyo4s-all` ships an umbrella package that re-exports every
+  * Generated code ships an umbrella package that re-exports every
   * category's extension in one import.
   *
   * The class is intentionally minimal — no caches, no lazy state — so

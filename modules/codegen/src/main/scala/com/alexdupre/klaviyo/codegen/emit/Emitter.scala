@@ -877,7 +877,7 @@ class Emitter(val basePackage: String) {
              |      .body(writeToString[$typeStr](${p.scalaName}))
              |      .contentType("$ct")""".stripMargin
         } else {
-          s"""    ${p.scalaName}.toOption.foreach { v =>
+          s"""    ${p.scalaName}.foreach { v =>
              |      req = req
              |        .body(writeToString[$typeStr](v))
              |        .contentType("$ct")
@@ -932,10 +932,10 @@ class Emitter(val basePackage: String) {
     *     numbers, dates, ...) reduces to a string part with their
     *     ordinary string form.
     *
-    * Optional (Tristate) fields are gated on `toOption.foreach` so a
+    * Optional (Tristate) fields are gated on `Tristate#foreach` so a
     * missing value contributes no part. Required fields are always
     * appended. The whole body parameter may itself be optional, in
-    * which case the entire block runs only when `body.toOption`
+    * which case the entire block runs only when the body's `foreach`
     * yields a value.
     */
   private def emitMultipartBody(op: OperationPlan, p: ParamPlan): String = {
@@ -967,7 +967,7 @@ class Emitter(val basePackage: String) {
         else s"""sttp.client4.multipart("${escapeStr(f.jsonName)}", ${stringExprOf(f, ident)})"""
       if (f.required) s"""        parts = parts :+ ${partExpr(accessor)}"""
       else
-        s"""        $accessor.toOption.foreach { v =>
+        s"""        $accessor.foreach { v =>
            |          parts = parts :+ ${partExpr("v")}
            |        }""".stripMargin
     }.mkString("\n")
@@ -989,7 +989,7 @@ class Emitter(val basePackage: String) {
       // level above for the optional-wrapping case).
       core.linesIterator.map(_.stripPrefix("  ")).mkString("\n")
     } else {
-      s"""    ${p.scalaName}.toOption.foreach { body =>
+      s"""    ${p.scalaName}.foreach { body =>
          |$core
          |    }""".stripMargin
     }
@@ -1008,7 +1008,7 @@ class Emitter(val basePackage: String) {
     if (p.required) {
       s"""    uri = uri.addParam("$key", ${encode(ident)})"""
     } else {
-      s"""    $ident.toOption.foreach { v => uri = uri.addParam("$key", ${encode("v")}) }"""
+      s"""    $ident.foreach { v => uri = uri.addParam("$key", ${encode("v")}) }"""
     }
   }
 
@@ -1016,7 +1016,7 @@ class Emitter(val basePackage: String) {
     val ident = p.scalaName
     val key = escapeStr(p.jsonName)
     if (p.required) s"""    req = req.header("$key", $ident.toString)"""
-    else s"""    $ident.toOption.foreach { v => req = req.header("$key", v.toString) }"""
+    else s"""    $ident.foreach { v => req = req.header("$key", v.toString) }"""
   }
 
   // ------------------------------------------------------------------

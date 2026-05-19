@@ -31,8 +31,8 @@ object EventsDemo extends DemoApp {
           val one = client.events.getEvent(e.id)
           val metric = client.events.getMetricForEvent(e.id)
           val profile = client.events.getProfileForEvent(e.id)
-          val metricId = metric.data.toOption.map(_.id).getOrElse("?")
-          val profileId = profile.data.toOption.flatMap(_.id.toOption).getOrElse("?")
+          val metricId = metric.data.map(_.id).getOrElse("?")
+          val profileId = profile.data.flatMap(_.id).getOrElse("?")
           log(s"event ${one.data.id} → metric=$metricId profile=$profileId")
       }
     }

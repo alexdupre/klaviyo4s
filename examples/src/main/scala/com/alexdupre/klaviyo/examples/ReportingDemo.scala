@@ -22,7 +22,7 @@ object ReportingDemo extends DemoApp {
     // first metric available.
     val metrics = client.metrics.getMetrics()
     val conversionMetricIdOpt = metrics.data
-      .find(_.attributes.name.toOption.contains("Placed Order"))
+      .find(_.attributes.name.contains("Placed Order"))
       .orElse(metrics.data.headOption)
       .map(_.id)
 

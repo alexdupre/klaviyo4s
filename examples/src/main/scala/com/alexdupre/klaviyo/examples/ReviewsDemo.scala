@@ -26,7 +26,7 @@ object ReviewsDemo extends DemoApp {
         case None => log("account has no reviews; skipping")
         case Some(r) =>
           val one = client.reviews.getReview(r.id)
-          log(s"review id=${one.data.id} status=${one.data.attributes.status.toOption.getOrElse("?")}")
+          log(s"review id=${one.data.id} status=${one.data.attributes.status.getOrElse("?")}")
       }
     }
   }

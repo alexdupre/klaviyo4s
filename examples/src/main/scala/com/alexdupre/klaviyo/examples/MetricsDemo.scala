@@ -21,7 +21,7 @@ object MetricsDemo extends DemoApp {
       val resp = client.metrics.getMetrics()
       log(s"got ${resp.data.size} metric(s)")
       resp.data.take(3).foreach { m =>
-        log(s"  id=${m.id} name=${m.attributes.name.toOption.getOrElse("?")}")
+        log(s"  id=${m.id} name=${m.attributes.name.getOrElse("?")}")
       }
     }
 

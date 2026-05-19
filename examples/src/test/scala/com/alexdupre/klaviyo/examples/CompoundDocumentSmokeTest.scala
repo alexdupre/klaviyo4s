@@ -72,7 +72,7 @@ final class CompoundDocumentSmokeTest extends munit.FunSuite {
 
   test("compound document decodes each `included` variant into the right case") {
     val doc      = readFromString[GetProfileResponseCompoundDocument](sampleJson)
-    val included = doc.included.toOption.getOrElse(fail("included was Absent"))
+    val included = doc.included.getOrElse(fail("included was Absent"))
     assertEquals(included.size, 4)
 
     included(0) match {

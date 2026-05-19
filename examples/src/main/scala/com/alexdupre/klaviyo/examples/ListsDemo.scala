@@ -37,7 +37,7 @@ object ListsDemo extends DemoApp {
 
     section("getList by id") {
       val one = client.lists.getList(createdId)
-      log(s"name=${one.data.attributes.name.toOption.getOrElse("?")}")
+      log(s"name=${one.data.attributes.name.getOrElse("?")}")
     }
 
     section("list all lists (first page)") {

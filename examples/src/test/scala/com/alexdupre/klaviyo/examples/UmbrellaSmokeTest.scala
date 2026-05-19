@@ -6,7 +6,7 @@ import sttp.client4.testing.{ResponseStub, SyncBackendStub}
 import sttp.model.StatusCode
 import sttp.shared.Identity
 
-/** Smoke test for `klaviyo4s-all`.
+/** Smoke test for generated code.
   *
   * Demonstrates the "one import is enough" promise: a single
   * `import com.alexdupre.klaviyo.*` brings every category's
