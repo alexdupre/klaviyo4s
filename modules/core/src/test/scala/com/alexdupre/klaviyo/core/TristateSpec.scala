@@ -181,4 +181,83 @@ final class TristateSpec extends munit.FunSuite {
     assertEquals(Tristate.Absent.asInstanceOf[Tristate.Maybe[Int]].collect(pf), Tristate.Absent)
     assertEquals(Tristate.Null.asInstanceOf[Tristate.Maybe[Int]].collect(pf), Tristate.Null)
   }
+
+  test("filter keeps Value when predicate holds, otherwise Absent; preserves Null") {
+    assertEquals(Tristate.Value(7).filter(_ > 0), Tristate.Value(7))
+    assertEquals(Tristate.Value(-1).filter(_ > 0), Tristate.Absent)
+    assertEquals(Tristate.Absent.asInstanceOf[Tristate.Maybe[Int]].filter(_ > 0), Tristate.Absent)
+    assertEquals(Tristate.Null.asInstanceOf[Tristate.Maybe[Int]].filter(_ > 0), Tristate.Null)
+  }
+
+  test("filterNot is the complement of filter") {
+    assertEquals(Tristate.Value(7).filterNot(_ < 0), Tristate.Value(7))
+    assertEquals(Tristate.Value(-1).filterNot(_ < 0), Tristate.Absent)
+    assertEquals(Tristate.Null.asInstanceOf[Tristate.Maybe[Int]].filterNot(_ < 0), Tristate.Null)
+  }
+
+  test("for-comprehension `if` guard goes through withFilter and prunes Value") {
+    val r =
+      for {
+        n <- Tristate.Value(7): Tristate.Maybe[Int]
+        if n > 0
+      } yield n + 1
+    assertEquals(r, Tristate.Value(8))
+
+    val pruned =
+      for {
+        n <- Tristate.Value(-1): Tristate.Maybe[Int]
+        if n > 0
+      } yield n + 1
+    assertEquals(pruned, Tristate.Absent)
+  }
+
+  test("orElse returns this on Value, otherwise the alternative; by-name") {
+    assertEquals(Tristate.Value("hi").orElse(Tristate.Value("fallback")), Tristate.Value("hi"))
+    assertEquals(
+      Tristate.Absent.asInstanceOf[Tristate.Maybe[String]].orElse(Tristate.Value("fallback")),
+      Tristate.Value("fallback")
+    )
+    assertEquals(
+      Tristate.Null.asInstanceOf[Tristate.Maybe[String]].orElse(Tristate.Value("fallback")),
+      Tristate.Value("fallback")
+    )
+    var evaluated = false
+    val _ = Tristate.Value("hi").orElse { evaluated = true; Tristate.Value("never") }
+    assert(!evaluated, "alternative should not be evaluated when the receiver is Value")
+  }
+
+  test("flatten on a nested Tristate keeps the inner state, propagates Absent/Null") {
+    val nestedValue: Tristate.Maybe[Tristate.Maybe[Int]] = Tristate.Value(Tristate.Value(7))
+    assertEquals(nestedValue.flatten, Tristate.Value(7))
+
+    val nestedNullInner: Tristate.Maybe[Tristate.Maybe[Int]] = Tristate.Value(Tristate.Null)
+    assertEquals(nestedNullInner.flatten, Tristate.Null)
+
+    val nestedAbsentInner: Tristate.Maybe[Tristate.Maybe[Int]] = Tristate.Value(Tristate.Absent)
+    assertEquals(nestedAbsentInner.flatten, Tristate.Absent)
+
+    val outerAbsent: Tristate.Maybe[Tristate.Maybe[Int]] = Tristate.Absent
+    assertEquals(outerAbsent.flatten, Tristate.Absent)
+
+    val outerNull: Tristate.Maybe[Tristate.Maybe[Int]] = Tristate.Null
+    assertEquals(outerNull.flatten, Tristate.Null)
+  }
+
+  test("iterator / toList / toVector yield one element on Value, empty otherwise") {
+    assertEquals(Tristate.Value(7).iterator.toList, List(7))
+    assertEquals(Tristate.Absent.asInstanceOf[Tristate.Maybe[Int]].iterator.toList, Nil)
+    assertEquals(Tristate.Null.asInstanceOf[Tristate.Maybe[Int]].iterator.toList, Nil)
+
+    assertEquals(Tristate.Value(7).toList, List(7))
+    assertEquals(Tristate.Absent.asInstanceOf[Tristate.Maybe[Int]].toList, Nil)
+
+    assertEquals(Tristate.Value(7).toVector, Vector(7))
+    assertEquals(Tristate.Null.asInstanceOf[Tristate.Maybe[Int]].toVector, Vector.empty[Int])
+  }
+
+  test("nonEmpty is a synonym for isValue") {
+    assert(Tristate.Value(7).nonEmpty)
+    assert(!Tristate.Absent.asInstanceOf[Tristate.Maybe[Int]].nonEmpty)
+    assert(!Tristate.Null.asInstanceOf[Tristate.Maybe[Int]].nonEmpty)
+  }
 }

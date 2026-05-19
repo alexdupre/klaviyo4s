@@ -86,6 +86,11 @@ enum Tristate[+A, +S] {
     case _ => false
   }
 
+  /** Synonym for [[isValue]] that reads naturally next to `Option`-style
+    * call sites (`if (t.nonEmpty) ...`).
+    */
+  inline def nonEmpty: Boolean = isValue
+
   /** `true` iff the field was explicitly `null` on the wire. */
   inline def isNull: Boolean = this match {
     case Tristate.Null => true
@@ -211,6 +216,106 @@ enum Tristate[+A, +S] {
       case Tristate.Null => Tristate.Null
       case Tristate.Value(a) => f(a)
     }
+
+  /** Flatten a nested `Tristate`. When this is [[Tristate.Value]],
+    * returns the inner tristate; otherwise propagates the receiver's
+    * `Absent` / `Null` state. The result widens to [[Tristate.Maybe]]
+    * for the same reason [[map]] / [[flatMap]] do — the output's
+    * reachable states are the union of the outer and inner phantom
+    * states, capped at `Maybe`.
+    *
+    * Equivalent to `flatMap(identity)` when the inner type aligns;
+    * spelled out as a dedicated method so the implicit evidence
+    * (`A <:< Tristate[B, S2]`) makes the "nested" precondition a
+    * type-check rather than a runtime cast.
+    */
+  inline def flatten[B](using ev: A <:< Tristate[B, Tristate.States.Maybe]): Tristate[B, Tristate.States.Maybe] =
+    this match {
+      case Tristate.Absent => Tristate.Absent
+      case Tristate.Null => Tristate.Null
+      case Tristate.Value(a) => ev(a)
+    }
+
+  /** Keep [[Tristate.Value]] when the predicate holds; collapse to
+    * [[Tristate.Absent]] when it does not. `Absent` and `Null`
+    * receivers pass through unchanged — matching [[collect]]'s policy
+    * that the "filtered out" output is `Absent` while a `Null` input
+    * stays `Null`. Mirrors `Option#filter`.
+    *
+    * The result widens to [[Tristate.Maybe]] (same as [[map]] /
+    * [[flatMap]] / [[collect]]): the output reaches `Value` (kept),
+    * `Absent` (filtered or pass-through) or `Null` (pass-through).
+    */
+  inline def filter(p: A => Boolean): Tristate[A, Tristate.States.Maybe] = this match {
+    case Tristate.Absent => Tristate.Absent
+    case Tristate.Null => Tristate.Null
+    case Tristate.Value(a) => if (p(a)) Tristate.Value(a) else Tristate.Absent
+  }
+
+  /** Complement of [[filter]] — keep [[Tristate.Value]] when the
+    * predicate is FALSE. Same pass-through and widening rules.
+    */
+  inline def filterNot(p: A => Boolean): Tristate[A, Tristate.States.Maybe] = this match {
+    case Tristate.Absent => Tristate.Absent
+    case Tristate.Null => Tristate.Null
+    case Tristate.Value(a) => if (!p(a)) Tristate.Value(a) else Tristate.Absent
+  }
+
+  /** For-comprehension guard hook. Scala 3 desugars `for { x <- t if
+    * p(x) } yield ...` to `t.withFilter(p).map(...)`. We delegate to
+    * [[filter]]; there is no laziness benefit to a dedicated
+    * `WithFilter` class because a `Tristate` already carries at most
+    * one element.
+    */
+  inline def withFilter(p: A => Boolean): Tristate[A, Tristate.States.Maybe] = filter(p)
+
+  /** Return `this` when it is [[Tristate.Value]]; otherwise return
+    * `alternative`. The by-name `alternative` is only evaluated on
+    * `Absent` / `Null` receivers, so a fallback can safely be an
+    * expensive computation or a side-effectful default.
+    *
+    * The phantom state is threaded precisely as `States.Value | S2`:
+    * the result is reachable either through the receiver's `Value`
+    * branch or through whatever states the alternative declares. In
+    * particular, `Optional[A] orElse Optional[A]` stays
+    * `Optional[A]`, and `Maybe[A] orElse Value[A]` stays `Maybe[A]`
+    * — no forced widening to `Maybe` like [[map]] / [[flatMap]].
+    *
+    * Mirrors `Option#orElse`.
+    */
+  inline def orElse[B >: A, S2](alternative: => Tristate[B, S2]): Tristate[B, Tristate.States.Value | S2] =
+    this match {
+      case Tristate.Value(a) => Tristate.Value(a)
+      case _ => alternative
+    }
+
+  /** Iterator over the wrapped value. Yields a single element on
+    * [[Tristate.Value]], empty on `Absent` / `Null`. Useful when
+    * splicing a `Tristate` into a `for`-comprehension over an
+    * `Iterable` or for `flatMap`-style spread into collections.
+    */
+  inline def iterator: Iterator[A] = this match {
+    case Tristate.Value(a) => Iterator.single(a)
+    case _ => Iterator.empty
+  }
+
+  /** Single-element `List` projection. `Value(a) -> List(a)`; both
+    * `Absent` and `Null` collapse to `Nil`.
+    */
+  inline def toList: List[A] = this match {
+    case Tristate.Value(a) => a :: Nil
+    case _ => Nil
+  }
+
+  /** Single-element `Vector` projection. `Value(a) -> Vector(a)`;
+    * both `Absent` and `Null` collapse to `Vector.empty`. Pair this
+    * with the existing pagination helpers when concatenating optional
+    * pages.
+    */
+  inline def toVector: Vector[A] = this match {
+    case Tristate.Value(a) => Vector(a)
+    case _ => Vector.empty
+  }
 
   /** Apply a partial function to the wrapped value: when this is
     * [[Tristate.Value]] and `pf` is defined at the inner value,
