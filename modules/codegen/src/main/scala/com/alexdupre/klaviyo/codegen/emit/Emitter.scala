@@ -633,7 +633,7 @@ class Emitter(val basePackage: String) {
       }
       val rename =
         if (autoSnakeCase(f.scalaName) == f.jsonName) ""
-        else s"""@com.github.plokhotnyuk.jsoniter_scala.macros.named("${escapeStr(f.jsonName)}") """
+        else s"""@named("${escapeStr(f.jsonName)}") """
       val doc = fieldScaladoc(f.doc)
       s"$doc  $rename${f.scalaName}: $tpe$default$sep"
     }
@@ -717,7 +717,7 @@ class Emitter(val basePackage: String) {
         val needsComma = i < td.hiddenDiscriminators.size - 1 || td.fields.nonEmpty
         val sep = if (needsComma) "," else ""
         val ident = s"`${d.jsonName}`"
-        s"""  @com.github.plokhotnyuk.jsoniter_scala.macros.named("$nameOnWire") $ident: String$sep"""
+        s"""  @named("$nameOnWire") $ident: String$sep"""
       }.mkString("\n")
 
       val wireVisibleFieldLines = td.fields.zipWithIndex
@@ -963,8 +963,8 @@ class Emitter(val basePackage: String) {
     val partLines = rec.fields.map { f =>
       val accessor = s"body.${f.scalaName}"
       val partExpr: String => String = ident =>
-        if (isBinaryFile(f.scalaType)) s"""sttp.client4.multipartFile("${escapeStr(f.jsonName)}", $ident)"""
-        else s"""sttp.client4.multipart("${escapeStr(f.jsonName)}", ${stringExprOf(f, ident)})"""
+        if (isBinaryFile(f.scalaType)) s"""multipartFile("${escapeStr(f.jsonName)}", $ident)"""
+        else s"""multipart("${escapeStr(f.jsonName)}", ${stringExprOf(f, ident)})"""
       if (f.required) s"""        parts = parts :+ ${partExpr(accessor)}"""
       else
         s"""        $accessor.foreach { v =>
@@ -979,7 +979,7 @@ class Emitter(val basePackage: String) {
     // statements. Putting the initialiser inline avoids the
     // ambiguity entirely.
     val core =
-      s"""|      var parts: scala.collection.immutable.Seq[sttp.model.Part[sttp.client4.BasicBodyPart]] = scala.collection.immutable.Vector.empty
+      s"""|      var parts: Seq[sttp.model.Part[BasicBodyPart]] = Vector.empty
           |$partLines
           |      req = req.multipartBody(parts)""".stripMargin
 
