@@ -64,7 +64,14 @@ object KlaviyoError {
       val detail = head.flatMap(_.detail.toOption).filter(_.nonEmpty)
       val code = head.flatMap(_.code.toOption).filter(_.nonEmpty)
       val excerpt = Option(rawBody).map(_.trim).filter(_.nonEmpty).map { b =>
-        if (b.length <= 200) b else b.take(200) + "…"
+        if (b.length <= 200) b
+        else {
+          // Avoid slicing in the middle of a UTF-16 surrogate pair —
+          // that produces a dangling high surrogate that is not valid
+          // Unicode and can confuse downstream log consumers.
+          val cut = if (Character.isHighSurrogate(b.charAt(199))) 199 else 200
+          b.substring(0, cut) + "…"
+        }
       }
       val tail = (title, detail) match {
         case (Some(t), Some(d)) => Some(s"$t: $d")
