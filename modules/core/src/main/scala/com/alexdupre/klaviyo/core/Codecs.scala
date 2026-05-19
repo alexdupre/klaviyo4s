@@ -43,50 +43,55 @@ object Codecs {
   // `null` itself (returning `Tristate.Null` for nullable Tristate
   // states) before the inner primitive codec is ever invoked.
 
+  /** Shared "swallow wire-null, otherwise decode normally" routine for
+    * the primitive codecs below. Each codec uses the same shape — peek
+    * for an `n` token, consume the null literal returning the type's
+    * safe default, else roll back and let the reader's primitive
+    * decode do its thing. Inlined so there's no closure allocation on
+    * the decode hot path.
+    */
+  private inline def nullTolerant[A](in: JsonReader, fallback: A, msg: String)(inline read: => A): A =
+    if (in.isNextToken('n')) { in.readNullOrError(fallback, msg); fallback }
+    else { in.rollbackToken(); read }
+
   given JsonValueCodec[String] = new JsonValueCodec[String] {
     def decodeValue(in: JsonReader, default: String): String =
-      if (in.isNextToken('n')) { in.readNullOrError("", "expected string or null"); "" }
-      else { in.rollbackToken(); in.readString("") }
+      nullTolerant(in, "", "expected string or null")(in.readString(""))
     def encodeValue(x: String, out: JsonWriter): Unit = out.writeVal(x)
     def nullValue: String = ""
   }
 
   given JsonValueCodec[Int] = new JsonValueCodec[Int] {
     def decodeValue(in: JsonReader, default: Int): Int =
-      if (in.isNextToken('n')) { in.readNullOrError(0, "expected int or null"); 0 }
-      else { in.rollbackToken(); in.readInt() }
+      nullTolerant(in, 0, "expected int or null")(in.readInt())
     def encodeValue(x: Int, out: JsonWriter): Unit = out.writeVal(x)
     def nullValue: Int = 0
   }
 
   given JsonValueCodec[Long] = new JsonValueCodec[Long] {
     def decodeValue(in: JsonReader, default: Long): Long =
-      if (in.isNextToken('n')) { in.readNullOrError(0L, "expected long or null"); 0L }
-      else { in.rollbackToken(); in.readLong() }
+      nullTolerant(in, 0L, "expected long or null")(in.readLong())
     def encodeValue(x: Long, out: JsonWriter): Unit = out.writeVal(x)
     def nullValue: Long = 0L
   }
 
   given JsonValueCodec[Boolean] = new JsonValueCodec[Boolean] {
     def decodeValue(in: JsonReader, default: Boolean): Boolean =
-      if (in.isNextToken('n')) { in.readNullOrError(false, "expected boolean or null"); false }
-      else { in.rollbackToken(); in.readBoolean() }
+      nullTolerant(in, false, "expected boolean or null")(in.readBoolean())
     def encodeValue(x: Boolean, out: JsonWriter): Unit = out.writeVal(x)
     def nullValue: Boolean = false
   }
 
   given JsonValueCodec[Double] = new JsonValueCodec[Double] {
     def decodeValue(in: JsonReader, default: Double): Double =
-      if (in.isNextToken('n')) { in.readNullOrError(0.0, "expected double or null"); 0.0 }
-      else { in.rollbackToken(); in.readDouble() }
+      nullTolerant(in, 0.0, "expected double or null")(in.readDouble())
     def encodeValue(x: Double, out: JsonWriter): Unit = out.writeVal(x)
     def nullValue: Double = 0.0
   }
 
   given JsonValueCodec[Float] = new JsonValueCodec[Float] {
     def decodeValue(in: JsonReader, default: Float): Float =
-      if (in.isNextToken('n')) { in.readNullOrError(0.0f, "expected float or null"); 0.0f }
-      else { in.rollbackToken(); in.readFloat() }
+      nullTolerant(in, 0.0f, "expected float or null")(in.readFloat())
     def encodeValue(x: Float, out: JsonWriter): Unit = out.writeVal(x)
     def nullValue: Float = 0.0f
   }
