@@ -46,13 +46,22 @@ import scala.concurrent.duration.*
   *                       Set to `false` to collapse to the conservative
   *                       "429 + 503 only" behaviour from earlier
   *                       releases.
+  * @param onRetry        invoked once per retry decision, immediately
+  *                       before the executor sleeps. The library never
+  *                       logs on its own; this hook is the supported
+  *                       way to surface retry activity to your logger
+  *                       of choice. The callback runs synchronously
+  *                       on the calling thread, and any exception it
+  *                       throws is swallowed so a buggy logger cannot
+  *                       break the request. The default is a no-op.
   */
 final case class RetryPolicy(
   maxAttempts: Int = 5,
   baseDelay: FiniteDuration = 200.millis,
   maxDelay: FiniteDuration = 30.seconds,
   jitter: RetryPolicy.Jitter = RetryPolicy.Jitter.Full,
-  retryTransient: Boolean = true
+  retryTransient: Boolean = true,
+  onRetry: RetryEvent => Unit = _ => ()
 )
 
 object RetryPolicy {

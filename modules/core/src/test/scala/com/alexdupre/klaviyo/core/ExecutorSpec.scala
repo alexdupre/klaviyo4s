@@ -253,4 +253,110 @@ final class ExecutorSpec extends munit.FunSuite {
     assertEquals(ex.status, 502)
     assertEquals(attempts.get(), 1, "with retryTransient=false, GET/502 must not retry")
   }
+
+  // ------------------------------------------------------------------
+  // onRetry hook (RetryPolicy.onRetry → RetryEvent stream).
+  // ------------------------------------------------------------------
+
+  /** Capture every RetryEvent the executor reports and run with a
+    * config whose policy uses that capture as its `onRetry`. Returns
+    * (events-buffer, fresh-client) so each test gets its own buffer.
+    */
+  private def withCaptureClient(
+    backend: SyncBackend,
+    policy: RetryPolicy = fastRetry
+  ): (collection.mutable.ListBuffer[RetryEvent], KlaviyoClient[Identity]) = {
+    val seen = collection.mutable.ListBuffer.empty[RetryEvent]
+    val customCfg = cfg.copy(retry = policy.copy(onRetry = ev => { seen += ev; () }))
+    val client = new KlaviyoClient[Identity](backend, customCfg)
+    (seen, client)
+  }
+
+  test("onRetry fires once per 503 with ServiceUnavailable reason and the attempt number that failed") {
+    val attempts = new AtomicInteger(0)
+    val stub = SyncBackendStub.whenAnyRequest.thenRespondF { _ =>
+      val n = attempts.incrementAndGet()
+      if (n < 3) ResponseStub.adjust("", StatusCode.ServiceUnavailable)
+      else ResponseStub.adjust("\"ok\"", StatusCode.Ok)
+    }
+    val (seen, client) = withCaptureClient(stub)
+    Executor.execute(client, anyRequest)(_ => ())
+    assertEquals(seen.size, 2, "two 503s, two retry events")
+    assert(seen.forall(_.reason == RetryEvent.Reason.ServiceUnavailable))
+    assertEquals(seen.map(_.attempt).toList, List(1, 2))
+  }
+
+  test("onRetry reports RateLimited with the parsed Retry-After when present") {
+    val attempts = new AtomicInteger(0)
+    val stub = SyncBackendStub.whenAnyRequest.thenRespondF { _ =>
+      val n = attempts.incrementAndGet()
+      if (n == 1)
+        ResponseStub.adjust(
+          "{\"errors\":[]}",
+          StatusCode.TooManyRequests,
+          headers = Seq(Header("Retry-After", "3"))
+        )
+      else ResponseStub.adjust("\"ok\"", StatusCode.Ok)
+    }
+    // Need maxDelay >= 3s for the server's Retry-After to be honoured.
+    val tolerant   = fastRetry.copy(maxDelay = 10.seconds)
+    val (seen, client) = withCaptureClient(stub, policy = tolerant)
+    Executor.execute(client, anyRequest)(_ => ())
+    assertEquals(seen.size, 1)
+    val ev = seen.head
+    assertEquals(ev.reason, RetryEvent.Reason.RateLimited(Some(3.seconds)))
+    // Delay must match the server's Retry-After when honoured.
+    assertEquals(ev.delay, 3.seconds)
+  }
+
+  test("onRetry reports ServerError(status) for the 5xx-transient family") {
+    val attempts = new AtomicInteger(0)
+    val stub = SyncBackendStub.whenAnyRequest.thenRespondF { _ =>
+      val n = attempts.incrementAndGet()
+      if (n == 1) ResponseStub.adjust("", StatusCode.BadGateway)
+      else ResponseStub.adjust("\"ok\"", StatusCode.Ok)
+    }
+    val (seen, client) = withCaptureClient(stub)
+    Executor.execute(client, anyRequest)(_ => ())
+    assertEquals(seen.size, 1)
+    assertEquals(seen.head.reason, RetryEvent.Reason.ServerError(502))
+  }
+
+  test("onRetry reports Transport(cause) when retrying a transport exception") {
+    val attempts = new AtomicInteger(0)
+    val cause    = new java.net.ConnectException("refused")
+    val stub = SyncBackendStub.whenAnyRequest.thenRespondF { _ =>
+      val n = attempts.incrementAndGet()
+      if (n == 1) throw cause
+      else ResponseStub.adjust("\"ok\"", StatusCode.Ok)
+    }
+    val (seen, client) = withCaptureClient(stub)
+    Executor.execute(client, anyRequest)(_ => ())
+    assertEquals(seen.size, 1)
+    seen.head.reason match {
+      case RetryEvent.Reason.Transport(c) => assertEquals(c, cause)
+      case other => fail(s"expected Transport, got $other")
+    }
+  }
+
+  test("onRetry is not invoked when the request succeeds on the first attempt") {
+    val stub = SyncBackendStub.whenAnyRequest.thenRespondAdjust("\"ok\"", StatusCode.Ok)
+    val (seen, client) = withCaptureClient(stub)
+    Executor.execute(client, anyRequest)(_ => ())
+    assertEquals(seen.size, 0)
+  }
+
+  test("a throwing onRetry does not break the request — exception is swallowed") {
+    val attempts = new AtomicInteger(0)
+    val stub = SyncBackendStub.whenAnyRequest.thenRespondF { _ =>
+      val n = attempts.incrementAndGet()
+      if (n < 2) ResponseStub.adjust("", StatusCode.ServiceUnavailable)
+      else ResponseStub.adjust("\"ok\"", StatusCode.Ok)
+    }
+    val badPolicy = fastRetry.copy(onRetry = _ => throw new RuntimeException("logger blew up"))
+    val client = new KlaviyoClient[Identity](stub, cfg.copy(retry = badPolicy))
+    val out = Executor.execute(client, anyRequest)(_ => "ok")
+    assertEquals(out, "ok")
+    assertEquals(attempts.get(), 2)
+  }
 }

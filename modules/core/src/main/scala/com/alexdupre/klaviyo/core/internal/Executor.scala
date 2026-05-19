@@ -1,6 +1,6 @@
 package com.alexdupre.klaviyo.core.internal
 
-import com.alexdupre.klaviyo.core.{KlaviyoAuth, KlaviyoError, RetryPolicy}
+import com.alexdupre.klaviyo.core.{KlaviyoAuth, KlaviyoError, RetryEvent, RetryPolicy}
 import com.alexdupre.klaviyo.core.jsonapi.ErrorDocument
 import com.alexdupre.klaviyo.core.KlaviyoClient
 import com.github.plokhotnyuk.jsoniter_scala.core.{readFromString as jsonRead, JsonReaderException}
@@ -79,6 +79,7 @@ object Executor {
           case Outcome.Retry(reason) if attemptNumber < policy.maxAttempts =>
             nextDelay(policy, reason, attemptNumber) match {
               case Some(delay) =>
+                notifyRetry(policy, attemptNumber, delay, eventReason(reason, resp))
                 client.sleep.sleep(delay).flatMap(_ =>
                   attempt(client, request, decode, attemptNumber + 1)
                 )
@@ -141,6 +142,7 @@ object Executor {
       // `Transient` always uses computed exp-backoff, which is
       // capped — `nextDelay` never returns `None` for this branch.
       val delay = nextDelay(policy, Outcome.RetryReason.Transient, attemptNumber).getOrElse(policy.maxDelay)
+      notifyRetry(policy, attemptNumber, delay, RetryEvent.Reason.Transport(cause))
       client.sleep.sleep(delay).flatMap(_ =>
         attempt(client, request, decode, attemptNumber + 1)
       )
@@ -179,6 +181,38 @@ object Executor {
     case _: java.net.NoRouteToHostException => true
     case _: javax.net.ssl.SSLHandshakeException => true
     case _ => false
+  }
+
+  /** Invoke the user's `onRetry` callback, swallowing any exception
+    * so a buggy logger cannot break the request. Centralised here so
+    * the two retry paths (HTTP status, transport) stay consistent.
+    */
+  private def notifyRetry(
+    policy: RetryPolicy,
+    attemptNumber: Int,
+    delay: FiniteDuration,
+    reason: RetryEvent.Reason
+  ): Unit = {
+    try policy.onRetry(RetryEvent(attemptNumber, delay, reason))
+    catch { case NonFatal(_) => () }
+  }
+
+  /** Map the internal `Outcome.RetryReason` (carries either an
+    * optional `Retry-After` seconds value or a flag for the 5xx
+    * family) to the public [[RetryEvent.Reason]] surface. The
+    * status code for the `ServerError` case is read from the
+    * response we're about to retry against.
+    */
+  private def eventReason(
+    reason: Outcome.RetryReason,
+    resp: Response[String]
+  ): RetryEvent.Reason = reason match {
+    case Outcome.RetryReason.RateLimited(after) =>
+      RetryEvent.Reason.RateLimited(after.map(s => FiniteDuration(s.toLong, SECONDS)))
+    case Outcome.RetryReason.ServiceUnavailable =>
+      RetryEvent.Reason.ServiceUnavailable
+    case Outcome.RetryReason.Transient =>
+      RetryEvent.Reason.ServerError(resp.code.code)
   }
 
   /** Apply the user-supplied decoder to a 2xx body, wrapping any
