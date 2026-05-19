@@ -63,8 +63,9 @@ object Filter {
   /** Render a string value as `"escaped"`. Klaviyo's filter grammar
     * requires double-quoted strings (single quotes are NOT accepted
     * at the filter-syntax level, even though earlier versions of
-    * Klaviyo's docs implied otherwise). Embedded double quotes are
-    * backslash-escaped to keep the literal a single token.
+    * Klaviyo's docs implied otherwise). Embedded double quotes and
+    * backslashes are backslash-escaped to keep the literal a single
+    * token.
     *
     * The double quotes themselves are not URI-safe — sttp's URI
     * builder encodes them to `%22` when this filter value lands in
@@ -73,8 +74,19 @@ object Filter {
     * because those characters are allowed in query values per
     * RFC 3986.
     */
-  inline def quoteString(s: String): String =
-    "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+  def quoteString(s: String): String = {
+    val sb = new java.lang.StringBuilder(s.length + 2)
+    sb.append('"')
+    var i = 0
+    while (i < s.length) {
+      val c = s.charAt(i)
+      if (c == '\\' || c == '"') sb.append('\\')
+      sb.append(c)
+      i += 1
+    }
+    sb.append('"')
+    sb.toString
+  }
 
   /** Render a boolean as a bare `true` / `false` (no quotes).
     * Klaviyo's filter language accepts both quoted and unquoted
