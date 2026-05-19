@@ -37,14 +37,3 @@ final class KlaviyoClient[F[_]](
     */
   given sttp.monad.MonadError[F] = backend.monad
 }
-
-object KlaviyoClient {
-
-  /** Convenience constructor for the common case where the `Sleep[F]` is
-    * resolved implicitly.
-    */
-  def apply[F[_]](backend: Backend[F], config: KlaviyoConfig)(using
-    Sleep[F]
-  ): KlaviyoClient[F] =
-    new KlaviyoClient(backend, config)
-}
