@@ -91,6 +91,73 @@ final class PlannerSpec extends munit.FunSuite {
     )
   }
 
+  test("oneOf with colliding discriminators emits a hybrid ResourceUnion (conflicting subset merged)") {
+    // FlowDefinition.triggers is a `oneOf` of seven trigger schemas
+    // discriminated by `type`. Two of them — ProfilePropertyDateTrigger
+    // and CustomObjectDateTrigger — share `type: "date"`. The hybrid
+    // path keeps the other five as proper variants and collapses the
+    // two `date` variants into a single merged arm pointing at the
+    // synthesised `AnyDateTrigger` record.
+    val triggers = plan.types
+      .collectFirst { case u: TypeDef.ResourceUnion if u.name == "FlowDefinitionTriggers" => u }
+      .getOrElse(fail("expected FlowDefinitionTriggers to be a ResourceUnion"))
+
+    val discValues = triggers.variants.map(_.discriminator)
+    assertEquals(
+      discValues.toSet,
+      Set("list", "segment", "metric", "date", "price-drop", "low-inventory")
+    )
+    // Exactly 6 arms — the "date" pair was merged into one.
+    assertEquals(triggers.variants.size, 6)
+
+    val dateVariant = triggers.variants.find(_.discriminator == "date").getOrElse(fail("missing date arm"))
+    // The conflicting arm points at the synthesised merged record
+    // (LCS-derived name), not at either of the original variants.
+    dateVariant.scalaType match {
+      case ScalaType.Ref(name) =>
+        assert(name == "AnyDateTrigger", s"expected AnyDateTrigger, got $name")
+      case other => fail(s"expected Ref, got $other")
+    }
+    // The merged record is in the plan and carries the union of the
+    // two date triggers' fields. ProfilePropertyDateTrigger has
+    // `date_profile_property`; CustomObjectDateTrigger has
+    // `custom_object_label`. The merged record must have both.
+    val merged = plan.types
+      .collectFirst { case r: TypeDef.Record if r.name == "AnyDateTrigger" => r }
+      .getOrElse(fail("expected synthesised AnyDateTrigger record"))
+    val mergedFieldNames = merged.fields.map(_.jsonName).toSet
+    assert(mergedFieldNames.contains("date_profile_property"),
+      s"merged record should carry date_profile_property; saw $mergedFieldNames")
+    assert(mergedFieldNames.contains("custom_object_label"),
+      s"merged record should carry custom_object_label; saw $mergedFieldNames")
+  }
+
+  test("Compound document ResourceUnions keep one variant per included resource type") {
+    // The compound-document `included` unions are the original
+    // non-colliding use case for ResourceUnion. Pick one whose
+    // discriminators are guaranteed to be all distinct (each maps
+    // to a single JSON:API resource type) and verify the hybrid
+    // grouping logic is a no-op there — same number of variants
+    // as discriminators, each variant Ref'd at a distinct target.
+    val compoundUnions = plan.types.collect {
+      case u: TypeDef.ResourceUnion if u.name.endsWith("CompoundDocumentIncluded") => u
+    }
+    assert(compoundUnions.nonEmpty, "expected at least one CompoundDocumentIncluded ResourceUnion")
+    compoundUnions.foreach { u =>
+      val targetNames = u.variants.collect { case ResourceVariant(_, _, ScalaType.Ref(n)) => n }
+      assertEquals(
+        targetNames.distinct.size,
+        u.variants.size,
+        s"${u.name}: each variant should point at a distinct target ref"
+      )
+      assertEquals(
+        u.variants.map(_.discriminator).distinct.size,
+        u.variants.size,
+        s"${u.name}: discriminators must be unique"
+      )
+    }
+  }
+
   test("CollectionLinks is also deduplicated against core") {
     assert(!plan.types.exists(_.name == "CollectionLinks"))
   }

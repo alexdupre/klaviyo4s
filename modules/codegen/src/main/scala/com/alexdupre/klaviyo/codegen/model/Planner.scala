@@ -626,7 +626,15 @@ final class Planner(
       }
       // `oneOf` of `$ref`s to JSON:API resources → resource union
       // discriminated by the wire `type` field (gap #4).
-      asResourceUnion(rawField.oneOf) match {
+      //
+      // Even when some variants share the same discriminator value
+      // (e.g. Klaviyo's segment filters with multiple shapes carrying
+      // `type: "date"`), the hybrid path emits a proper sealed-trait
+      // union: variants with unique discriminators stay typed, while
+      // the conflicting subset collapses into a single merged
+      // "<Disc>Variant" arm. The all-collapse fallback below only
+      // fires when no variant exposes a discriminator at all.
+      asResourceUnion(rawField.oneOf, parentName, fieldPascal) match {
         case Some(variants) =>
           val finalName = synthesizeResourceUnion(
             requestedName = requested,
@@ -638,58 +646,26 @@ final class Planner(
           return ScalaType.Ref(finalName)
         case None => ()
       }
-      // Last-resort handling for `oneOf` of `$ref`s that don't share
-      // a JSON:API `type` discriminator (e.g. Klaviyo's send-options,
-      // send-strategy, tracking-options unions). Merge every variant's
-      // properties into a single synthetic record, treating any field
-      // that doesn't appear in EVERY variant as optional. Decoding then
-      // succeeds for any variant; callers can dispatch on whatever
-      // discriminator field the merged record exposes (e.g. `method`
-      // on send strategies).
-      //
-      // Two parents with the same variant set reuse the same
-      // synthetic type via [[mergedOneOfCache]] — saves emitting
-      // structurally identical records under parent-prefixed names.
+      // Last-resort handling for `oneOf` of `$ref`s that share no
+      // JSON:API `type` discriminator at all (e.g. Klaviyo's
+      // send-options, send-strategy, tracking-options unions). Merge
+      // every variant's properties into a single synthetic record,
+      // treating any field that doesn't appear in EVERY variant as
+      // optional. Decoding then succeeds for any variant; callers
+      // can dispatch on whatever discriminator field the merged
+      // record exposes (e.g. `method` on send strategies).
       val refTargets = rawField.oneOf.flatMap(_.ref.map(_.stripPrefix("#/components/schemas/")))
       if (refTargets.size == rawField.oneOf.size) {
-        val cacheKey = refTargets.toSet
-        val fieldPascal = pascalCase(fieldName)
-        // Track every parent that requests this variant set. The
-        // post-plan pass uses this to decide whether the merged
-        // record is shared (multi-parent → stays top-level) or
-        // exclusive (single-parent → nest under that parent).
-        mergedOneOfParents.get(cacheKey) match {
-          case Some(ctx) => ctx.parents += parentName
-          case None =>
-            mergedOneOfParents(cacheKey) = Planner.MergedOneOfContext(
-              fieldPascal = fieldPascal,
-              parents = scala.collection.mutable.Set(parentName)
-            )
-        }
-        mergedOneOfCache.get(cacheKey) match {
-          case Some(existing) => return ScalaType.Ref(existing)
-          case None =>
-            mergedOneOfSchema(rawField.oneOf).foreach { merged =>
-              // Two-stage naming: prefer the LCS-derived `AnyX` form,
-              // falling back to a parent+field disambiguator like
-              // `ProfileMetricPropertyFilterFilter`. The fallback
-              // kicks in either (a) when the LCS/joined form is
-              // longer than [[MaxMergedOneOfNameLength]] (would blow
-              // past filesystem path limits), or (b) when the
-              // preferred name is already claimed by a different
-              // variant set.
-              val derived = mergedOneOfName(refTargets)
-              val parentScoped = s"$parentName$fieldPascal"
-              val preferred = if (derived.length > MaxMergedOneOfNameLength) parentScoped else derived
-              val finalName = synthesize(
-                requestedName = preferred,
-                schema = merged.copy(description = rawField.description.orElse(merged.description)),
-                fallbackName = Some(parentScoped)
-              )
-              mergedOneOfCache(cacheKey) = finalName
-              return ScalaType.Ref(finalName)
-            }
-        }
+        return ScalaType.Ref(synthesizeMergedOneOfRecord(
+          refTargets = refTargets,
+          items = rawField.oneOf,
+          description = rawField.description,
+          parentName = parentName,
+          // All-collapse: the merged record is the only thing produced
+          // for this field, so it naturally claims the field's name
+          // slot in the parent companion.
+          effectiveShortName = fieldPascal
+        ))
       }
     }
     val schema = flattenAllOf(rawField, visited = Set.empty)
@@ -1144,38 +1120,161 @@ final class Planner(
     * like a JSON:API resource (has a `type` property whose schema is
     * a string enum naming the discriminator value).
     *
-    * Returns `None` if any item is not a clean ref, or if any
+    * Returns `None` if any item is not a clean ref or if any
     * referenced schema doesn't expose a recognisable `type`
-    * discriminator. The caller falls back to other handling.
+    * discriminator — the caller falls back to the merged-record
+    * path. When every variant contributes a discriminator, the
+    * result is a list of [[ResourceVariant]]s **grouped by
+    * discriminator**:
+    *
+    *   - Variants with a unique discriminator stay 1:1 with the
+    *     original `$ref`.
+    *   - Variants sharing a discriminator value (e.g. two flow
+    *     triggers both carrying `type: "date"`) are merged into a
+    *     single synthetic record via [[synthesizeMergedOneOfRecord]],
+    *     and represented by one variant pointing at the merged
+    *     record. The outer dispatch on `type` still picks this arm
+    *     unambiguously; users internally see a case class with the
+    *     union of all conflicting variants' fields.
+    *
+    * Has side effects: synthesising a merged record for any
+    * conflicting group registers it on [[synthesized]] / [[mergedOneOfCache]] /
+    * [[mergedOneOfParents]] just like the all-collapse path.
     */
-  private def asResourceUnion(items: List[RawSchema]): Option[List[ResourceVariant]] = {
-    val variants = items.map { item =>
+  private def asResourceUnion(
+    items: List[RawSchema],
+    parentName: String,
+    fieldPascal: String
+  ): Option[List[ResourceVariant]] = {
+    // Resolve each item to (discriminator, target_ref, original_item).
+    val triples: List[Option[(String, String, RawSchema)]] = items.map { item =>
       item.ref.flatMap { ref =>
         val target = ref.stripPrefix("#/components/schemas/")
         if (target.contains('/')) None
         else resolveRef(ref).flatMap { resolved =>
-          discriminatorOf(resolved).map { disc =>
-            ResourceVariant(
-              caseName = s"${pascalCase(disc)}Variant",
-              discriminator = disc,
-              scalaType = ScalaType.Ref(target)
-            )
-          }
+          discriminatorOf(resolved).map(d => (d, target, item))
         }
       }
     }
-    // Two checks:
-    //   1. every variant must contribute a recognised discriminator
-    //      (otherwise it's a partial union we can't dispatch on);
-    //   2. discriminator VALUES must be distinct — when two variants
-    //      share the same discriminator value (e.g. Klaviyo's
-    //      segment filters where multiple shapes carry `type: "date"`
-    //      or `type: "string"`), we can't generate a sealed-trait
-    //      dispatcher, so we fall through to the merged-record path.
-    val flatVariants = variants.flatten
-    val discrValues = flatVariants.map(_.discriminator)
-    if (variants.forall(_.isDefined) && discrValues.distinct.size == discrValues.size) Some(flatVariants)
-    else None
+    if (triples.exists(_.isEmpty)) None
+    else {
+      // Group by discriminator, preserving the first-appearance order
+      // of each distinct discriminator so the emitted sealed-trait's
+      // case order is stable and tracks the spec.
+      val grouped =
+        scala.collection.mutable.LinkedHashMap.empty[String, List[(String, RawSchema)]]
+      triples.flatten.foreach { case (disc, target, item) =>
+        grouped.update(disc, grouped.getOrElse(disc, Nil) :+ ((target, item)))
+      }
+      // If the grouping collapsed everything to a single variant
+      // (the whole oneOf shares one discriminator value, or the
+      // oneOf had only one item to begin with), a sealed-trait
+      // wrapper would add a single useless case. Fall through to the
+      // caller's all-collapse path, which synthesises a plain merged
+      // record the parent's field can reference directly — same shape
+      // as the codegen produced before the hybrid path existed, and
+      // avoids a naming clash where the wrapper's `shortName` would
+      // otherwise compete with the merged record's parent-nesting
+      // slot.
+      if (grouped.size <= 1) None
+      else Some(grouped.iterator.map { case (disc, members) =>
+        val caseName = s"${pascalCase(disc)}Variant"
+        val scalaType = members match {
+          case (target, _) :: Nil =>
+            ScalaType.Ref(target)
+          case multiple =>
+            // Conflicting group: merge the contributing schemas into
+            // a single synthetic record. The merged record's fields
+            // are the union; required is the intersection (see
+            // `mergedOneOfSchema`). Outer dispatch on `disc` still
+            // picks this arm unambiguously.
+            //
+            // The merged record nests under the same parent as the
+            // sealed-trait wrapper, but with a discriminator-augmented
+            // shortName (`<PascalDisc><FieldPascal>`, e.g.
+            // `DateTriggers`) so it doesn't compete with the wrapper
+            // for the parent's bare `fieldPascal` slot.
+            ScalaType.Ref(synthesizeMergedOneOfRecord(
+              refTargets = multiple.map(_._1),
+              items = multiple.map(_._2),
+              description = None,
+              parentName = parentName,
+              effectiveShortName = s"${pascalCase(disc)}$fieldPascal"
+            ))
+        }
+        ResourceVariant(caseName, disc, scalaType)
+      }.toList)
+    }
+  }
+
+  /** Merge a list of `$ref`-carrying schemas into one synthetic
+    * record. Shared by the all-collapse fallback (when no variant
+    * exposes a discriminator) and by [[asResourceUnion]] (when a
+    * subset of variants share a discriminator value).
+    *
+    * Registers the result in [[mergedOneOfCache]] / [[mergedOneOfParents]]
+    * so structurally identical groups across multiple parents collapse
+    * to one type. Returns the final (collision-disambiguated) Scala
+    * type name of the synthesised record.
+    *
+    * Naming follows the existing two-stage heuristic
+    * ([[mergedOneOfName]] + parent-scoped fallback): prefer an
+    * LCS-derived `AnyX` form, fall back to `<Parent><effectiveShortName>`
+    * when the preferred form is too long or already claimed. The
+    * post-plan single-parent nesting pass uses `effectiveShortName`
+    * as the record's `shortName` when nesting it under its parent.
+    *
+    * @param effectiveShortName the name slot this record occupies
+    *                           inside its parent's companion when
+    *                           nested. The all-collapse path passes
+    *                           the field's `fieldPascal` directly
+    *                           (e.g. `Filter`, `Triggers`). The
+    *                           hybrid resource-union path passes
+    *                           `<PascalDisc><FieldPascal>` (e.g.
+    *                           `DateTriggers`) so the merged record
+    *                           doesn't compete with the sealed-trait
+    *                           wrapper that already claims
+    *                           `fieldPascal` as its own shortName.
+    */
+  private def synthesizeMergedOneOfRecord(
+    refTargets: List[String],
+    items: List[RawSchema],
+    description: Option[String],
+    parentName: String,
+    effectiveShortName: String
+  ): String = {
+    val cacheKey = refTargets.toSet
+    mergedOneOfParents.get(cacheKey) match {
+      case Some(ctx) => ctx.parents += parentName
+      case None =>
+        mergedOneOfParents(cacheKey) = Planner.MergedOneOfContext(
+          fieldPascal = effectiveShortName,
+          parents = scala.collection.mutable.Set(parentName)
+        )
+    }
+    mergedOneOfCache.get(cacheKey) match {
+      case Some(existing) => existing
+      case None =>
+        mergedOneOfSchema(items) match {
+          case Some(merged) =>
+            val derived = mergedOneOfName(refTargets)
+            val parentScoped = s"$parentName$effectiveShortName"
+            val preferred = if (derived.length > MaxMergedOneOfNameLength) parentScoped else derived
+            val finalName = synthesize(
+              requestedName = preferred,
+              schema = merged.copy(description = description.orElse(merged.description)),
+              fallbackName = Some(parentScoped)
+            )
+            mergedOneOfCache(cacheKey) = finalName
+            finalName
+          case None =>
+            // Shouldn't normally happen — refTargets was derived from
+            // resolved refs, so mergedOneOfSchema can't fail unless
+            // the spec mutates between calls. Fall back to the first
+            // contributor's name rather than crash.
+            refTargets.head
+        }
+    }
   }
 
   /** Extract the `type` discriminator value from a resource schema.
