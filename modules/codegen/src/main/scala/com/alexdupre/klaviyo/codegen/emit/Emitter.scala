@@ -309,16 +309,11 @@ class Emitter(val basePackage: String) {
       }
       .mkString("\n")
 
-    // Discriminator field names referenced by any variant, in
-    // insertion order. By construction (see Planner.asResourceUnion)
-    // every variant's discriminator list starts with the same primary
-    // field; secondary fields appear only on conflicting groups that
-    // were tie-broken.
-    val discFields: List[String] = {
-      val seen = scala.collection.mutable.LinkedHashSet.empty[String]
-      td.variants.foreach(_.discriminator.foreach { case (f, _) => seen += f })
-      seen.toList
-    }
+    // First-appearance order of discriminator field names matters:
+    // `Planner.asResourceUnion` puts the primary discriminator first
+    // on every variant, so `discFields.head` is the primary field
+    // and any secondary tie-breaker fields follow.
+    val discFields: List[String] = td.variants.flatMap(_.discriminator.map(_._1)).distinct
     val primaryField = discFields.head
 
     // Group variants by their primary discriminator value, preserving
