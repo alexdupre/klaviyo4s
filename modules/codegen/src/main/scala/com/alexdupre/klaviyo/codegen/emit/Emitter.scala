@@ -350,15 +350,27 @@ class Emitter(val basePackage: String) {
           // Sub-dispatch on the secondary field. The planner's
           // tie-break guarantees every variant in this group shares
           // the same secondary field name.
+          //
+          // All `${...}` arguments are pre-computed into local vals
+          // before the template — scalafmt only ever wraps an
+          // interpolation if the embedded expression is long, so
+          // keeping them as bare `$ident` references guarantees the
+          // template stays one logical line per emitted line.
           val secondaryField = multiple.head.discriminator(1)._1
+          val secondaryIdent = discIdent(secondaryField)
+          val primaryEsc = escapeStr(primaryValue)
+          val secondaryFieldEsc = escapeStr(secondaryField)
+          val primaryFieldEsc = escapeStr(primaryField)
           val subCases = multiple.map { v =>
-            val secondaryValue = v.discriminator(1)._2
-            s"""          case "${escapeStr(secondaryValue)}" => ${decodeArm(v)}"""
+            val secondaryValueEsc = escapeStr(v.discriminator(1)._2)
+            s"""          case "$secondaryValueEsc" => ${decodeArm(v)}"""
           }.mkString("\n")
-          s"""        case "${escapeStr(primaryValue)}" =>
-             |          ${discIdent(secondaryField)} match {
+          val unknownMsg =
+            s"""unknown `$secondaryFieldEsc` discriminator (with `$primaryFieldEsc` = \\"$primaryEsc\\"): """
+          s"""        case "$primaryEsc" =>
+             |          $secondaryIdent match {
              |$subCases
-             |            case other => in.decodeError("unknown `${escapeStr(secondaryField)}` discriminator (with `${escapeStr(primaryField)}` = \\"${escapeStr(primaryValue)}\\"): " + other)
+             |            case other => in.decodeError("$unknownMsg" + other)
              |          }""".stripMargin
       }
     }.mkString("\n")
@@ -382,7 +394,9 @@ class Emitter(val basePackage: String) {
     val peekDecls = discFields.map(f => s"      var ${discIdent(f)}: String = null").mkString("\n")
     val peekAssigns = discFields.zipWithIndex.map { case (f, i) =>
       val keyword = if (i == 0) "if" else "else if"
-      s"""          $keyword (k == "${escapeStr(f)}" && ${discIdent(f)} == null) ${discIdent(f)} = in.readString(null)"""
+      val ident = discIdent(f)
+      val wire = escapeStr(f)
+      s"""          $keyword (k == "$wire" && $ident == null) $ident = in.readString(null)"""
     }.mkString("\n")
     val peekTrailingElse = "          else in.skip()"
     val peekErr =
