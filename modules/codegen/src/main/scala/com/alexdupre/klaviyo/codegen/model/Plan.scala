@@ -185,10 +185,29 @@ object TypeDef {
 
 /** One arm of a [[TypeDef.ResourceUnion]]. */
 final case class ResourceVariant(
-  /** PascalCased Scala case name (`ListResource`, `SegmentResource`, ...). */
+  /** PascalCased Scala case name (`ListVariant`, `SegmentVariant`, …).
+    * For multi-field-discriminated variants the secondary discriminator
+    * value is folded in too (`NumericGreaterThanVariant`).
+    */
   caseName: String,
-  /** Wire value of the JSON:API `type` field (`"list"`, `"segment"`, ...). */
-  discriminator: String,
+  /** The list of (field name, wire value) pairs that uniquely identify
+    * this variant on the wire. The list is ordered:
+    *
+    *   - Length 1: a single primary discriminator (the JSON:API
+    *     `type` field, e.g. `[("type", "list")]`). The original /
+    *     common case for Klaviyo resources.
+    *
+    *   - Length > 1: a composite discriminator with a tie-breaker
+    *     field. Emitted when the primary discriminator collides
+    *     across variants of the same union and a secondary
+    *     single-value-enum field is available to disambiguate
+    *     (e.g. `[("type", "numeric"), ("operator", "greater-than")]`
+    *     for the postal-code-distance numeric filters).
+    *
+    * The emitter peeks every distinct field name listed across all
+    * variants of the union and dispatches hierarchically.
+    */
+  discriminator: List[(String, String)],
   /** Inner Scala type — typically a [[ScalaType.Ref]] to a generated
     * case class.
     */

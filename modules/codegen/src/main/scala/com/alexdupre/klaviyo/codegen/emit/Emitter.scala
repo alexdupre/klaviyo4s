@@ -285,6 +285,20 @@ class Emitter(val basePackage: String) {
     * top-level file emit ([[emitResourceUnion]]) and for inlining
     * into a parent's companion ([[renderRecord]] picks up nested
     * union children alongside nested records and enums).
+    *
+    * Two emission shapes, picked from the variants' discriminator
+    * shape:
+    *
+    *   - **Single-field** (every variant has a length-1
+    *     discriminator, i.e. `[("type", value)]`): peek `type` and
+    *     dispatch on the value. The historical shape.
+    *
+    *   - **Multi-field** (at least one variant has a length-2
+    *     discriminator, i.e. a tie-breaker added by the planner):
+    *     peek every distinct discriminator field name across all
+    *     variants and dispatch hierarchically — outer `match` on the
+    *     primary field, nested `match` on the secondary field for
+    *     primary values that need it.
     */
   private def renderResourceUnion(td: TypeDef.ResourceUnion): String = {
     val localName = td.shortName.getOrElse(td.name)
@@ -294,23 +308,85 @@ class Emitter(val basePackage: String) {
         s"  final case class ${v.caseName}(value: $inner) extends $localName"
       }
       .mkString("\n")
-    val decodeCases = td.variants
-      .map { v =>
-        val inner = renderScalaType(v.scalaType)
-        s"""        case "${escapeStr(
-            v.discriminator
-          )}" => $localName.${v.caseName}(summon[JsonValueCodec[$inner]].decodeValue(in, null.asInstanceOf[$inner]))"""
+
+    // Discriminator field names referenced by any variant, in
+    // insertion order. By construction (see Planner.asResourceUnion)
+    // every variant's discriminator list starts with the same primary
+    // field; secondary fields appear only on conflicting groups that
+    // were tie-broken.
+    val discFields: List[String] = {
+      val seen = scala.collection.mutable.LinkedHashSet.empty[String]
+      td.variants.foreach(_.discriminator.foreach { case (f, _) => seen += f })
+      seen.toList
+    }
+    val primaryField = discFields.head
+
+    // Group variants by their primary discriminator value, preserving
+    // first-appearance order, so the emitted case order is stable.
+    val byPrimary: scala.collection.mutable.LinkedHashMap[String, List[ResourceVariant]] = {
+      val m = scala.collection.mutable.LinkedHashMap.empty[String, List[ResourceVariant]]
+      td.variants.foreach { v =>
+        val primaryValue = v.discriminator.head._2
+        m.update(primaryValue, m.getOrElse(primaryValue, Nil) :+ v)
       }
-      .mkString("\n")
+      m
+    }
+
+    def decodeArm(v: ResourceVariant): String = {
+      val inner = renderScalaType(v.scalaType)
+      s"$localName.${v.caseName}(summon[JsonValueCodec[$inner]].decodeValue(in, null.asInstanceOf[$inner]))"
+    }
+
+    // Identifier name used for the peeked value of a discriminator
+    // field. Just camelCase the field name and suffix `Val` so it
+    // never collides with a Scala keyword.
+    def discIdent(field: String): String = lowerCamelCase(field) + "Val"
+
+    val decodeCases = byPrimary.iterator.map { case (primaryValue, vs) =>
+      vs match {
+        case v :: Nil =>
+          s"""        case "${escapeStr(primaryValue)}" => ${decodeArm(v)}"""
+        case multiple =>
+          // Sub-dispatch on the secondary field. The planner's
+          // tie-break guarantees every variant in this group shares
+          // the same secondary field name.
+          val secondaryField = multiple.head.discriminator(1)._1
+          val subCases = multiple.map { v =>
+            val secondaryValue = v.discriminator(1)._2
+            s"""          case "${escapeStr(secondaryValue)}" => ${decodeArm(v)}"""
+          }.mkString("\n")
+          s"""        case "${escapeStr(primaryValue)}" =>
+             |          ${discIdent(secondaryField)} match {
+             |$subCases
+             |            case other => in.decodeError("unknown `${escapeStr(secondaryField)}` discriminator (with `${escapeStr(primaryField)}` = \\"${escapeStr(primaryValue)}\\"): " + other)
+             |          }""".stripMargin
+      }
+    }.mkString("\n")
+
     val encodeCases = td.variants
       .map { v =>
         val inner = renderScalaType(v.scalaType)
         s"      case $localName.${v.caseName}(v) => summon[JsonValueCodec[$inner]].encodeValue(v, out)"
       }
       .mkString("\n")
+
     val firstVariant = td.variants.headOption.map(_.caseName).getOrElse("Unknown")
     val firstInner = td.variants.headOption.map(v => renderScalaType(v.scalaType)).getOrElse("Nothing")
     val docPrefix = if (td.parent.isDefined) scaladoc(td.doc) else ""
+
+    // Inline the discriminator-peeking into the body of decodeValue
+    // rather than a separate private method. Inlining keeps the
+    // peeked values as plain local `var`s in the decoder's stack
+    // frame — no instance-level mutable state, no race condition
+    // under concurrent decodes, no need to reset between calls.
+    val peekDecls = discFields.map(f => s"      var ${discIdent(f)}: String = null").mkString("\n")
+    val peekAssigns = discFields.zipWithIndex.map { case (f, i) =>
+      val keyword = if (i == 0) "if" else "else if"
+      s"""          $keyword (k == "${escapeStr(f)}" && ${discIdent(f)} == null) ${discIdent(f)} = in.readString(null)"""
+    }.mkString("\n")
+    val peekTrailingElse = "          else in.skip()"
+    val peekErr =
+      s"""      if (${discIdent(primaryField)} == null) in.decodeError("missing `${escapeStr(primaryField)}` field")"""
 
     s"""|${docPrefix}sealed trait $localName
         |
@@ -320,11 +396,24 @@ class Emitter(val basePackage: String) {
         |  given JsonValueCodec[$localName] = new JsonValueCodec[$localName] {
         |    def decodeValue(in: JsonReader, default: $localName): $localName = {
         |      in.setMark()
-        |      val discriminator = peekDiscriminator(in)
+        |$peekDecls
+        |      if (!in.isNextToken('{')) in.objectStartOrNullError()
+        |      if (!in.isNextToken('}')) {
+        |        in.rollbackToken()
+        |        var continue = true
+        |        while (continue) {
+        |          val k = in.readKeyAsString()
+        |$peekAssigns
+        |$peekTrailingElse
+        |          continue = in.isNextToken(',')
+        |          if (!continue && !in.isCurrentToken('}')) in.objectEndOrCommaError()
+        |        }
+        |      }
+        |$peekErr
         |      in.rollbackToMark()
-        |      discriminator match {
+        |      ${discIdent(primaryField)} match {
         |$decodeCases
-        |        case other => in.decodeError("unknown `type` discriminator: " + other)
+        |        case other => in.decodeError("unknown `${escapeStr(primaryField)}` discriminator: " + other)
         |      }
         |    }
         |
@@ -333,24 +422,6 @@ class Emitter(val basePackage: String) {
         |    }
         |
         |    def nullValue: $localName = $localName.$firstVariant(null.asInstanceOf[$firstInner])
-        |
-        |    private def peekDiscriminator(in: JsonReader): String = {
-        |      if (!in.isNextToken('{')) in.objectStartOrNullError()
-        |      var typeVal: String = null
-        |      if (!in.isNextToken('}')) {
-        |        in.rollbackToken()
-        |        var continue = true
-        |        while (continue) {
-        |          val k = in.readKeyAsString()
-        |          if (k == "type" && typeVal == null) typeVal = in.readString(null)
-        |          else in.skip()
-        |          continue = in.isNextToken(',')
-        |          if (!continue && !in.isCurrentToken('}')) in.objectEndOrCommaError()
-        |        }
-        |      }
-        |      if (typeVal == null) in.decodeError("compound document item missing `type` field")
-        |      typeVal
-        |    }
         |  }
         |
         |  given JsonValueCodec[Vector[$localName]] = com.alexdupre.klaviyo.core.Codecs.emptySafeCodec(
@@ -358,6 +429,16 @@ class Emitter(val basePackage: String) {
         |    Vector.empty
         |  )
         |}""".stripMargin
+  }
+
+  /** Convert a snake/kebab-case identifier to lowerCamelCase. Used
+    * to derive a Scala variable name from a JSON wire field name
+    * (e.g. `date_field_type` → `dateFieldType`).
+    */
+  private def lowerCamelCase(s: String): String = {
+    val parts = s.split("[\\s_\\-]+").filter(_.nonEmpty)
+    if (parts.isEmpty) s
+    else parts.head.toLowerCase + parts.tail.map(_.capitalize).mkString
   }
 
   /** A sealed trait over a small set of primitive JSON variants. */

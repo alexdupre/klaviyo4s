@@ -1146,64 +1146,134 @@ final class Planner(
     parentName: String,
     fieldPascal: String
   ): Option[List[ResourceVariant]] = {
-    // Resolve each item to (discriminator, target_ref, original_item).
-    val triples: List[Option[(String, String, RawSchema)]] = items.map { item =>
+    // Resolve each item to (primary disc, target ref, original item,
+    // resolved + flattened schema). The resolved/flat schema is kept
+    // around so [[tryMultiFieldDiscriminator]] can inspect properties
+    // for a secondary tie-breaker without re-running resolveRef.
+    val resolveds: List[Option[(String, String, RawSchema, RawSchema)]] = items.map { item =>
       item.ref.flatMap { ref =>
         val target = ref.stripPrefix("#/components/schemas/")
         if (target.contains('/')) None
         else resolveRef(ref).flatMap { resolved =>
-          discriminatorOf(resolved).map(d => (d, target, item))
+          val flat = flattenAllOf(resolved, visited = Set.empty)
+          discriminatorOf(resolved).map(d => (d, target, item, flat))
         }
       }
     }
-    if (triples.exists(_.isEmpty)) None
+    if (resolveds.exists(_.isEmpty)) None
     else {
-      // Group by discriminator, preserving the first-appearance order
-      // of each distinct discriminator so the emitted sealed-trait's
+      // Group by primary discriminator, preserving the first-appearance
+      // order of each distinct discriminator so the emitted sealed-trait's
       // case order is stable and tracks the spec.
       val grouped =
-        scala.collection.mutable.LinkedHashMap.empty[String, List[(String, RawSchema)]]
-      triples.flatten.foreach { case (disc, target, item) =>
-        grouped.update(disc, grouped.getOrElse(disc, Nil) :+ ((target, item)))
+        scala.collection.mutable.LinkedHashMap.empty[String, List[(String, RawSchema, RawSchema)]]
+      resolveds.flatten.foreach { case (disc, target, item, flat) =>
+        grouped.update(disc, grouped.getOrElse(disc, Nil) :+ ((target, item, flat)))
       }
-      // If the grouping collapsed everything to a single variant
-      // (the whole oneOf shares one discriminator value, or the
-      // oneOf had only one item to begin with), a sealed-trait
-      // wrapper would add a single useless case. Fall through to the
-      // caller's all-collapse path, which synthesises a plain merged
-      // record the parent's field can reference directly — same shape
-      // as the codegen produced before the hybrid path existed, and
-      // avoids a naming clash where the wrapper's `shortName` would
-      // otherwise compete with the merged record's parent-nesting
-      // slot.
-      if (grouped.size <= 1) None
-      else Some(grouped.iterator.map { case (disc, members) =>
-        val caseName = s"${pascalCase(disc)}Variant"
-        val scalaType = members match {
-          case (target, _) :: Nil =>
-            ScalaType.Ref(target)
-          case multiple =>
-            // Conflicting group: merge the contributing schemas into
-            // a single synthetic record. The merged record's fields
-            // are the union; required is the intersection (see
-            // `mergedOneOfSchema`). Outer dispatch on `disc` still
-            // picks this arm unambiguously.
-            //
-            // The merged record nests under the same parent as the
-            // sealed-trait wrapper, but with a discriminator-augmented
-            // shortName (`<PascalDisc><FieldPascal>`, e.g.
-            // `DateTriggers`) so it doesn't compete with the wrapper
-            // for the parent's bare `fieldPascal` slot.
-            ScalaType.Ref(synthesizeMergedOneOfRecord(
-              refTargets = multiple.map(_._1),
-              items = multiple.map(_._2),
-              description = None,
-              parentName = parentName,
-              effectiveShortName = s"${pascalCase(disc)}$fieldPascal"
+      val finalVariants: List[ResourceVariant] = grouped.iterator.flatMap { case (disc, members) =>
+        members match {
+          case (target, _, _) :: Nil =>
+            List(ResourceVariant(
+              caseName = s"${pascalCase(disc)}Variant",
+              discriminator = List(PrimaryDiscriminatorField -> disc),
+              scalaType = ScalaType.Ref(target)
             ))
+          case multiple =>
+            // Conflict on the primary discriminator. First try to
+            // tie-break by a SECONDARY single-value-enum field that is
+            // distinct across the group. If that succeeds we keep
+            // proper per-variant typing. Otherwise fall back to
+            // merging — the merged record collapses internal
+            // type-safety for the group but the outer dispatch still
+            // works.
+            tryMultiFieldDiscriminator(disc, multiple) match {
+              case Some(splitVariants) => splitVariants
+              case None =>
+                List(ResourceVariant(
+                  caseName = s"${pascalCase(disc)}Variant",
+                  discriminator = List(PrimaryDiscriminatorField -> disc),
+                  scalaType = ScalaType.Ref(synthesizeMergedOneOfRecord(
+                    refTargets = multiple.map(_._1),
+                    items = multiple.map(_._2),
+                    description = None,
+                    parentName = parentName,
+                    effectiveShortName = s"${pascalCase(disc)}$fieldPascal"
+                  ))
+                ))
+            }
         }
-        ResourceVariant(caseName, disc, scalaType)
-      }.toList)
+      }.toList
+      // Same fall-through rule as before: if the final variant list
+      // collapses to a single arm (whole oneOf shares a discriminator
+      // AND no tie-breaker was found, or the oneOf had only one item),
+      // a sealed-trait wrapper adds no value. Let the caller's
+      // all-collapse path emit a plain merged record instead.
+      if (finalVariants.size <= 1) None else Some(finalVariants)
+    }
+  }
+
+  /** JSON:API discriminator field name. Klaviyo's schemas consistently
+    * use `type` as the primary discriminator across every union, so
+    * the planner hard-codes that name here. If a future spec ever uses
+    * a different field, this is the single point of change.
+    */
+  private val PrimaryDiscriminatorField: String = "type"
+
+  /** Attempt to disambiguate a group of resource-union variants that
+    * share the same primary discriminator value. Looks for a single
+    * SECONDARY field that is:
+    *
+    *   - present on every member;
+    *   - declared as a single-value string enum on every member;
+    *   - assigned a DISTINCT value across all members.
+    *
+    * The first qualifying candidate (in property declaration order)
+    * wins — fields are iterated as they appear on the first member,
+    * which matches the spec's authoring order and keeps emitted code
+    * stable across regenerations.
+    *
+    * Returns `Some(List[ResourceVariant])` with one variant per
+    * member when a tie-breaker is found. Each variant carries a
+    * composite discriminator (`[("type", primary), (fieldName,
+    * secondaryValue)]`) and points directly at the member's
+    * resource schema. Returns `None` otherwise, signalling the
+    * caller to fall back to merging.
+    */
+  private def tryMultiFieldDiscriminator(
+    primaryDisc: String,
+    members: List[(String, RawSchema, RawSchema)]
+  ): Option[List[ResourceVariant]] = {
+    // For each member, build a map: candidate-field-name → its
+    // single-value-enum string value. Skip the primary discriminator
+    // field; everything else is a candidate.
+    val candidateMaps: List[Map[String, String]] = members.map { case (_, _, flat) =>
+      flat.properties.iterator.flatMap {
+        case (name, prop) if name != PrimaryDiscriminatorField =>
+          singleStringEnumValue(prop).map(v => name -> v)
+        case _ => None
+      }.toMap
+    }
+    // Intersect candidate field names so we only consider fields
+    // present on every member. Preserve the first member's
+    // declaration order for deterministic emission.
+    val firstMemberOrder: List[String] = members.head._3.properties.keys
+      .filter(k => k != PrimaryDiscriminatorField && candidateMaps.forall(_.contains(k)))
+      .toList
+    // First field whose values are pairwise distinct wins.
+    firstMemberOrder.iterator.flatMap { field =>
+      val values = candidateMaps.map(_(field))
+      if (values.distinct.size == values.size) Some(field -> values) else None
+    }.collectFirst { case x => x }.map { case (tieBreakerField, values) =>
+      members.zip(values).map { case ((target, _, _), v) =>
+        ResourceVariant(
+          caseName = s"${pascalCase(primaryDisc)}${pascalCase(v)}Variant",
+          discriminator = List(
+            PrimaryDiscriminatorField -> primaryDisc,
+            tieBreakerField -> v
+          ),
+          scalaType = ScalaType.Ref(target)
+        )
+      }
     }
   }
 

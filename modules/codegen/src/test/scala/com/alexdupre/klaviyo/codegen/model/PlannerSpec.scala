@@ -91,45 +91,71 @@ final class PlannerSpec extends munit.FunSuite {
     )
   }
 
-  test("oneOf with colliding discriminators emits a hybrid ResourceUnion (conflicting subset merged)") {
+  test("oneOf with colliding primary discriminators tie-breaks via a secondary single-value-enum field") {
     // FlowDefinition.triggers is a `oneOf` of seven trigger schemas
     // discriminated by `type`. Two of them — ProfilePropertyDateTrigger
-    // and CustomObjectDateTrigger — share `type: "date"`. The hybrid
-    // path keeps the other five as proper variants and collapses the
-    // two `date` variants into a single merged arm pointing at the
-    // synthesised `AnyDateTrigger` record.
+    // and CustomObjectDateTrigger — share `type: "date"`. The planner
+    // detects that `date_field_type` is a single-value enum on both
+    // (`"profile-property"` vs `"custom-object"`) and uses it as a
+    // secondary tie-breaker. Result: all seven variants stay proper
+    // refs; no merged record needed.
     val triggers = plan.types
       .collectFirst { case u: TypeDef.ResourceUnion if u.name == "FlowDefinitionTriggers" => u }
       .getOrElse(fail("expected FlowDefinitionTriggers to be a ResourceUnion"))
 
-    val discValues = triggers.variants.map(_.discriminator)
+    assertEquals(triggers.variants.size, 7, "tie-break should keep all seven trigger variants")
+
+    val primaryDiscValues = triggers.variants.map(_.discriminator.head._2).distinct
     assertEquals(
-      discValues.toSet,
+      primaryDiscValues.toSet,
       Set("list", "segment", "metric", "date", "price-drop", "low-inventory")
     )
-    // Exactly 6 arms — the "date" pair was merged into one.
-    assertEquals(triggers.variants.size, 6)
 
-    val dateVariant = triggers.variants.find(_.discriminator == "date").getOrElse(fail("missing date arm"))
-    // The conflicting arm points at the synthesised merged record
-    // (LCS-derived name), not at either of the original variants.
-    dateVariant.scalaType match {
-      case ScalaType.Ref(name) =>
-        assert(name == "AnyDateTrigger", s"expected AnyDateTrigger, got $name")
-      case other => fail(s"expected Ref, got $other")
+    // Five variants have a single-field discriminator (just `type`);
+    // the two date variants have a two-field composite discriminator.
+    val singleField = triggers.variants.filter(_.discriminator.size == 1)
+    val multiField  = triggers.variants.filter(_.discriminator.size == 2)
+    assertEquals(singleField.size, 5)
+    assertEquals(multiField.size, 2)
+
+    val dateVariants = multiField
+    assert(dateVariants.forall(_.discriminator.head == ("type", "date")))
+    assertEquals(
+      dateVariants.map(_.discriminator(1)).toSet,
+      Set("date_field_type" -> "profile-property", "date_field_type" -> "custom-object")
+    )
+
+    // Each date variant points DIRECTLY at the original schema, not at
+    // a merged synthetic record — that's the whole win of multi-field
+    // discrimination.
+    val dateTargets = dateVariants.collect { case ResourceVariant(_, _, ScalaType.Ref(n)) => n }.toSet
+    assertEquals(dateTargets, Set("ProfilePropertyDateTrigger", "CustomObjectDateTrigger"))
+    // No `AnyDateTrigger` merged record should have been synthesised.
+    assert(!plan.types.exists(_.name == "AnyDateTrigger"),
+      "tie-break replaces the merge, so AnyDateTrigger should not be in the plan")
+  }
+
+  test("multi-field tie-break works on filter-style unions (numeric + operator)") {
+    // ProfilePostalCodeDistanceCondition.filter has two variants that
+    // both have `type: "numeric"`. The secondary `operator` field is
+    // a single-value enum (`"greater-than"` vs `"less-than"`) and ties
+    // them apart cleanly. After the option-2 fall-through is itself
+    // shadowed by multi-field detection, we now get a proper 2-arm
+    // sealed trait.
+    val cond = plan.types
+      .collectFirst { case u: TypeDef.ResourceUnion if u.name == "ProfilePostalCodeDistanceConditionFilter" => u }
+      .getOrElse(fail("expected ProfilePostalCodeDistanceConditionFilter to be a ResourceUnion"))
+
+    assertEquals(cond.variants.size, 2)
+    cond.variants.foreach { v =>
+      assertEquals(v.discriminator.size, 2)
+      assertEquals(v.discriminator.head, ("type", "numeric"))
+      assert(v.discriminator(1)._1 == "operator")
     }
-    // The merged record is in the plan and carries the union of the
-    // two date triggers' fields. ProfilePropertyDateTrigger has
-    // `date_profile_property`; CustomObjectDateTrigger has
-    // `custom_object_label`. The merged record must have both.
-    val merged = plan.types
-      .collectFirst { case r: TypeDef.Record if r.name == "AnyDateTrigger" => r }
-      .getOrElse(fail("expected synthesised AnyDateTrigger record"))
-    val mergedFieldNames = merged.fields.map(_.jsonName).toSet
-    assert(mergedFieldNames.contains("date_profile_property"),
-      s"merged record should carry date_profile_property; saw $mergedFieldNames")
-    assert(mergedFieldNames.contains("custom_object_label"),
-      s"merged record should carry custom_object_label; saw $mergedFieldNames")
+    assertEquals(
+      cond.variants.map(_.discriminator(1)._2).toSet,
+      Set("greater-than", "less-than")
+    )
   }
 
   test("Compound document ResourceUnions keep one variant per included resource type") {
@@ -150,11 +176,16 @@ final class PlannerSpec extends munit.FunSuite {
         u.variants.size,
         s"${u.name}: each variant should point at a distinct target ref"
       )
+      // Each variant's primary discriminator is unique (no ambiguity
+      // → no tie-breaker needed → length-1 discriminator).
       assertEquals(
         u.variants.map(_.discriminator).distinct.size,
         u.variants.size,
         s"${u.name}: discriminators must be unique"
       )
+      u.variants.foreach { v =>
+        assertEquals(v.discriminator.size, 1, s"${u.name}.${v.caseName}: expected single-field discriminator")
+      }
     }
   }
 
