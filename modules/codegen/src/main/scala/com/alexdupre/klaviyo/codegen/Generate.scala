@@ -235,16 +235,32 @@ object Generate {
   // CLI argv parsing
   // --------------------------------------------------------------------
 
+  /** Boolean flags carry no value; every other recognised flag
+    * takes the next argv slot. Listed explicitly so the generic
+    * key-value branch can't accidentally eat the *next* flag when
+    * a boolean is followed by another `--flag`. The original
+    * `parseFlags` only special-cased `--no-scalafmt`, which meant
+    * `--fetch-if-missing --no-scalafmt` parsed as
+    * `fetch-if-missing = "--no-scalafmt"` (and the scalafmt skip
+    * was silently dropped).
+    */
+  private val BooleanFlags: Set[String] = Set("no-scalafmt", "fetch-if-missing")
+
   private def parseFlags(args: List[String]): Map[String, String] = {
     val out = scala.collection.mutable.Map.empty[String, String]
     var i = 0
     val arr = args.toIndexedSeq
     while (i < arr.size) {
       val a = arr(i)
-      if (a == "--no-scalafmt") { out("no-scalafmt") = "true"; i += 1 }
-      else if (a.startsWith("--") && i + 1 < arr.size) {
-        out(a.stripPrefix("--")) = arr(i + 1)
-        i += 2
+      if (a.startsWith("--")) {
+        val name = a.stripPrefix("--")
+        if (BooleanFlags.contains(name)) {
+          out(name) = "true"
+          i += 1
+        } else if (i + 1 < arr.size) {
+          out(name) = arr(i + 1)
+          i += 2
+        } else i += 1
       } else i += 1
     }
     out.toMap
