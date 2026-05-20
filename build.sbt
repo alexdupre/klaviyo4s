@@ -47,7 +47,7 @@ lazy val scalafmtVersion = "3.11.1"
 lazy val munitVersion = "1.3.0"
 
 /** Project version. */
-ThisBuild / version := "0.9.0"
+ThisBuild / version := "0.9.1-SNAPSHOT"
 ThisBuild / versionScheme := Some("early-semver")
 
 ThisBuild / organization := "com.alexdupre"

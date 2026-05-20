@@ -79,6 +79,70 @@ final class TristateSpec extends munit.FunSuite {
     assertEquals(decoded.xs, Tristate.Value(Vector("x")))
   }
 
+  test("empty Vector on the wire decodes to Value(Vector.empty), not Value(null)") {
+    // Regression for a user-reported bug: a `Tristate.Maybe[Vector[T]]`
+    // field whose wire value is `[]` was decoded as
+    // `Tristate.Value(null)` instead of `Tristate.Value(Vector.empty)`.
+    //
+    // Root cause: jsoniter's macro-generated decoder for `Vector[T]`
+    // returns the `default` argument for empty arrays (an
+    // allocation-avoidance optimisation), and its `nullValue` is
+    // `null` for any reference-typed result. The Tristate codec was
+    // passing `null.asInstanceOf[A]` as that default, so the empty
+    // array became null.
+    val decoded = readFromString[TestPayload]("""{"xs":[]}""")
+    assertEquals(decoded.xs, Tristate.Value(Vector.empty[String]))
+    decoded.xs match {
+      case Tristate.Value(v) => assert(v != null, s"inner Vector must not be null; was $v")
+      case other             => fail(s"expected Value, got $other")
+    }
+  }
+
+  test("empty Vector of complex case class decodes correctly via Codecs.emptySafeCodec wrapper") {
+    // Mirrors the user's actual scenario: a `Tristate.Maybe[Vector[X]]`
+    // where X is a generated case class. The codegen emits its own
+    // `Vector[X]` codec via the `emptySafeCodec` wrapper for exactly
+    // this reason. Use the wrapper directly here to prove the pattern
+    // works end-to-end without depending on a freshly-regenerated
+    // examples tree.
+    case class Item(name: String, count: Int = 0)
+    object Item {
+      given JsonValueCodec[Item] = JsonCodecMaker.make
+      given JsonValueCodec[Vector[Item]] =
+        Codecs.emptySafeCodec(JsonCodecMaker.make[Vector[Item]], Vector.empty)
+    }
+    case class Container(items: Tristate.Maybe[Vector[Item]] = Tristate.Absent)
+    given JsonValueCodec[Container] = JsonCodecMaker.make
+
+    val empty = readFromString[Container]("""{"items":[]}""")
+    assertEquals(empty.items, Tristate.Value(Vector.empty[Item]))
+
+    val nonEmpty = readFromString[Container]("""{"items":[{"name":"a","count":3}]}""")
+    assertEquals(nonEmpty.items, Tristate.Value(Vector(Item("a", 3))))
+
+    val missing = readFromString[Container]("{}")
+    assertEquals(missing.items, Tristate.Absent)
+
+    val nulled = readFromString[Container]("""{"items":null}""")
+    assertEquals(nulled.items, Tristate.Null)
+  }
+
+  test("empty List/Map on the wire decode to the empty container, not null") {
+    // Same class of bug as the Vector one. The Codecs.scala givens for
+    // `List[String]` and `Map[String, String]` are both wrapped in
+    // `emptySafeCodec`, so an empty `[]` / `{}` survives through a
+    // Tristate.
+    case class C(
+      xs: Tristate.Maybe[List[String]] = Tristate.Absent,
+      m: Tristate.Maybe[Map[String, String]] = Tristate.Absent
+    )
+    given JsonValueCodec[C] = JsonCodecMaker.make
+
+    val r = readFromString[C]("""{"xs":[],"m":{}}""")
+    assertEquals(r.xs, Tristate.Value(List.empty[String]))
+    assertEquals(r.m, Tristate.Value(Map.empty[String, String]))
+  }
+
   test("decoded null is Tristate.Null, not Absent") {
     val decoded = readFromString[TestPayload]("""{"s":null}""")
     assertEquals(decoded.s, Tristate.Null)

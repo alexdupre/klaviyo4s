@@ -539,7 +539,16 @@ object Tristate {
           // we need `Tristate[A, S]` for some arbitrary phantom `S`.
           // Soundness is enforced at the construction site; here we
           // trust the wire format to match the field's declared S.
-          Tristate.Value(inner.decodeValue(in, null.asInstanceOf[A])).asInstanceOf[Tristate[A, S]]
+          //
+          // Use `inner.nullValue` as the decode default instead of
+          // `null.asInstanceOf[A]`. Jsoniter's macro for collection
+          // types (`Vector[T]`, `Map[K, V]`, …) returns the `default`
+          // verbatim for empty containers — passing `null` then makes
+          // `[]` decode as `Tristate.Value(null)`, which is a bug.
+          // Asking the inner codec for its own null-placeholder lets
+          // it surface `Vector.empty` / `Map.empty` / `0` / `""` as
+          // appropriate (see `Codecs.emptySafeCodec`).
+          Tristate.Value(inner.decodeValue(in, inner.nullValue)).asInstanceOf[Tristate[A, S]]
         }
       }
 

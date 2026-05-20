@@ -96,6 +96,40 @@ object Codecs {
     def nullValue: Float = 0.0f
   }
 
+  /** Wrap a macro-derived collection codec so an empty JSON array /
+    * object on the wire decodes to the supplied `empty` value instead
+    * of the codec's `default` argument.
+    *
+    * Background: jsoniter-scala's macro-generated decoder for
+    * collection types (`Vector[T]`, `List[T]`, `Map[K, V]`, …) returns
+    * the `default` parameter verbatim when the wire payload is the
+    * empty form (`[]` for arrays, `{}` for objects) — an
+    * allocation-avoidance optimisation. The macro also defaults
+    * `nullValue` to `null` for reference-typed result.
+    *
+    * Both behaviours surface as the same bug when one of these codecs
+    * is the inner of a [[Tristate]]: the Tristate codec passes
+    * `inner.nullValue` (or, in the old implementation,
+    * `null.asInstanceOf[A]`) as the default, and an empty container on
+    * the wire then decodes to `Tristate.Value(null)` instead of
+    * `Tristate.Value(emptyContainer)`.
+    *
+    * This wrapper closes both gaps:
+    *   - `decodeValue` substitutes the supplied `empty` for any `null`
+    *     default, so the macro's empty-container fast path produces
+    *     the right value.
+    *   - `nullValue` is `empty`, so any consumer (including
+    *     [[Tristate.codec]]) reading `inner.nullValue` gets a sensible
+    *     placeholder.
+    */
+  def emptySafeCodec[T](inner: JsonValueCodec[T], empty: T): JsonValueCodec[T] =
+    new JsonValueCodec[T] {
+      def decodeValue(in: JsonReader, default: T): T =
+        inner.decodeValue(in, if (default == null) empty else default)
+      def encodeValue(x: T, out: JsonWriter): Unit = inner.encodeValue(x, out)
+      def nullValue: T = empty
+    }
+
   // Common composite types Klaviyo's specs reference frequently.
   //
   // The `Vector[...]` instances exist specifically to make
@@ -106,34 +140,40 @@ object Codecs {
   // compose with. Providing explicit instances for the primitive
   // element types closes the gap.
   //
+  // Every collection codec is wrapped in [[emptySafeCodec]] so an
+  // empty `[]` (or `{}` for Map) on the wire decodes to the empty
+  // container, not `null`. See the wrapper's scaladoc for the full
+  // story.
+  //
   // For generated case-class / sealed-trait element types, the
   // codegen emits a sibling `given JsonValueCodec[Vector[T]]` in
-  // each type's companion — see `Emitter.scala`.
+  // each type's companion — see `Emitter.scala`. Those emissions
+  // use the same wrapper for the same reason.
   // `@targetName` is required because anonymous `given`s on
   // parameterised types like `Vector[X]` mangle to the same JVM-level
   // name regardless of `X`. Without explicit target names Scala 3
   // rejects the file with "two definitions cannot have the same
   // bytecode name". The names are not referenced by user code.
   @targetName("givenJsonValueCodecVectorString")
-  given JsonValueCodec[Vector[String]] = JsonCodecMaker.make
+  given JsonValueCodec[Vector[String]] = emptySafeCodec(JsonCodecMaker.make, Vector.empty)
 
   @targetName("givenJsonValueCodecVectorInt")
-  given JsonValueCodec[Vector[Int]] = JsonCodecMaker.make
+  given JsonValueCodec[Vector[Int]] = emptySafeCodec(JsonCodecMaker.make, Vector.empty)
 
   @targetName("givenJsonValueCodecVectorLong")
-  given JsonValueCodec[Vector[Long]] = JsonCodecMaker.make
+  given JsonValueCodec[Vector[Long]] = emptySafeCodec(JsonCodecMaker.make, Vector.empty)
 
   @targetName("givenJsonValueCodecVectorBoolean")
-  given JsonValueCodec[Vector[Boolean]] = JsonCodecMaker.make
+  given JsonValueCodec[Vector[Boolean]] = emptySafeCodec(JsonCodecMaker.make, Vector.empty)
 
   @targetName("givenJsonValueCodecVectorDouble")
-  given JsonValueCodec[Vector[Double]] = JsonCodecMaker.make
+  given JsonValueCodec[Vector[Double]] = emptySafeCodec(JsonCodecMaker.make, Vector.empty)
 
   @targetName("givenJsonValueCodecVectorFloat")
-  given JsonValueCodec[Vector[Float]] = JsonCodecMaker.make
+  given JsonValueCodec[Vector[Float]] = emptySafeCodec(JsonCodecMaker.make, Vector.empty)
 
-  given JsonValueCodec[List[String]] = JsonCodecMaker.make
-  given JsonValueCodec[Map[String, String]] = JsonCodecMaker.make
+  given JsonValueCodec[List[String]] = emptySafeCodec(JsonCodecMaker.make, Nil)
+  given JsonValueCodec[Map[String, String]] = emptySafeCodec(JsonCodecMaker.make, Map.empty)
 
   // Codecs for OpenAPI `string` schemas with a `format`. These are
   // needed in implicit scope for two reasons:

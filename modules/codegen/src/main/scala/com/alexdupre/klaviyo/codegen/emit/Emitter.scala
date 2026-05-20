@@ -353,8 +353,9 @@ class Emitter(val basePackage: String) {
         |    }
         |  }
         |
-        |  given JsonValueCodec[Vector[$localName]] = JsonCodecMaker.make(
-        |    CodecMakerConfig.withAllowRecursiveTypes(true)
+        |  given JsonValueCodec[Vector[$localName]] = com.alexdupre.klaviyo.core.Codecs.emptySafeCodec(
+        |    JsonCodecMaker.make[Vector[$localName]](CodecMakerConfig.withAllowRecursiveTypes(true)),
+        |    Vector.empty
         |  )
         |}""".stripMargin
   }
@@ -458,8 +459,9 @@ class Emitter(val basePackage: String) {
         |    def nullValue: $localName = $nullSentinel
         |  }
         |
-        |  given JsonValueCodec[Vector[$localName]] = JsonCodecMaker.make(
-        |    CodecMakerConfig.withAllowRecursiveTypes(true)
+        |  given JsonValueCodec[Vector[$localName]] = com.alexdupre.klaviyo.core.Codecs.emptySafeCodec(
+        |    JsonCodecMaker.make[Vector[$localName]](CodecMakerConfig.withAllowRecursiveTypes(true)),
+        |    Vector.empty
         |  )
         |}""".stripMargin
   }
@@ -552,8 +554,9 @@ class Emitter(val basePackage: String) {
         |    def nullValue: $localName = $localName.$firstCase
         |  }
         |
-        |  given JsonValueCodec[Vector[$localName]] = JsonCodecMaker.make(
-        |    CodecMakerConfig.withAllowRecursiveTypes(true)
+        |  given JsonValueCodec[Vector[$localName]] = com.alexdupre.klaviyo.core.Codecs.emptySafeCodec(
+        |    JsonCodecMaker.make[Vector[$localName]](CodecMakerConfig.withAllowRecursiveTypes(true)),
+        |    Vector.empty
         |  )
         |}""".stripMargin
   }
@@ -698,8 +701,9 @@ class Emitter(val basePackage: String) {
           |      .withAllowRecursiveTypes(true)
           |  )
           |
-          |  given JsonValueCodec[Vector[$localName]] = JsonCodecMaker.make(
-          |    CodecMakerConfig.withAllowRecursiveTypes(true)
+          |  given JsonValueCodec[Vector[$localName]] = com.alexdupre.klaviyo.core.Codecs.emptySafeCodec(
+          |    JsonCodecMaker.make[Vector[$localName]](CodecMakerConfig.withAllowRecursiveTypes(true)),
+          |    Vector.empty
           |  )""".stripMargin
     } else {
       // Wire-shim path — at least one field is a single-value enum
@@ -774,8 +778,9 @@ class Emitter(val basePackage: String) {
           |    def nullValue: $localName = null.asInstanceOf[$localName]
           |  }
           |
-          |  given JsonValueCodec[Vector[$localName]] = JsonCodecMaker.make(
-          |    CodecMakerConfig.withAllowRecursiveTypes(true)
+          |  given JsonValueCodec[Vector[$localName]] = com.alexdupre.klaviyo.core.Codecs.emptySafeCodec(
+          |    JsonCodecMaker.make[Vector[$localName]](CodecMakerConfig.withAllowRecursiveTypes(true)),
+          |    Vector.empty
           |  )""".stripMargin
     }
 
