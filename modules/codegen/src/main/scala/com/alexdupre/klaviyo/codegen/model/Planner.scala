@@ -1165,10 +1165,12 @@ final class Planner(
       // Group by primary discriminator, preserving the first-appearance
       // order of each distinct discriminator so the emitted sealed-trait's
       // case order is stable and tracks the spec.
-      val grouped =
-        scala.collection.mutable.LinkedHashMap.empty[String, List[(String, RawSchema, RawSchema)]]
-      resolveds.flatten.foreach { case (disc, target, item, flat) =>
-        grouped.update(disc, grouped.getOrElse(disc, Nil) :+ ((target, item, flat)))
+      val resolvedList = resolveds.flatten
+      val grouped: List[(String, List[(String, RawSchema, RawSchema)])] = {
+        val byDisc = resolvedList.groupBy(_._1).map { case (k, vs) =>
+          k -> vs.map { case (_, target, item, flat) => (target, item, flat) }
+        }
+        resolvedList.map(_._1).distinct.map(k => k -> byDisc(k))
       }
       val finalVariants: List[ResourceVariant] = grouped.iterator.flatMap { case (disc, members) =>
         members match {

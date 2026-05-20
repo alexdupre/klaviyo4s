@@ -317,14 +317,10 @@ class Emitter(val basePackage: String) {
     val primaryField = discFields.head
 
     // Group variants by their primary discriminator value, preserving
-    // first-appearance order, so the emitted case order is stable.
-    val byPrimary: scala.collection.mutable.LinkedHashMap[String, List[ResourceVariant]] = {
-      val m = scala.collection.mutable.LinkedHashMap.empty[String, List[ResourceVariant]]
-      td.variants.foreach { v =>
-        val primaryValue = v.discriminator.head._2
-        m.update(primaryValue, m.getOrElse(primaryValue, Nil) :+ v)
-      }
-      m
+    // first-appearance order so the emitted case order is stable.
+    val byPrimary: List[(String, List[ResourceVariant])] = {
+      val groups = td.variants.groupBy(_.discriminator.head._2)
+      td.variants.map(_.discriminator.head._2).distinct.map(k => k -> groups(k))
     }
 
     def decodeArm(v: ResourceVariant): String = {
